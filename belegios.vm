@@ -6,8 +6,8 @@
 ## Developed by: Carsten Wittenberg
 ## Date created: dd/mm/yyyy
 ## @param Gruppenbezeichnung:title=Gruppenbezeichnung|type=string|required=true|desc=Name der Gruppe die zu planen ist.
-## @param TherapeutenVerbal:title=TherapeutenVerbal|type=string|required=false|desc=Namen der verbalen Bezugstherapeuten. Trennen mit Komma.
-## @param TherapeutenNonVerbal:title=TherapeutenNonVerbal|type=string|required=false|desc=Namen der Nonverbalen Bezugstherapeuten. Trennen mit Komma.
+## @param TherapeutenVerbal:title=TherapeutenVerbal|type=string|required=false|desc=VERALTET - jetzt in den Einstellungen (Zahnrad) pflegen. Dient nur noch als Fallback/Vorbelegung. Trennen mit Komma.
+## @param TherapeutenNonVerbal:title=TherapeutenNonVerbal|type=string|required=false|desc=VERALTET - jetzt in den Einstellungen (Zahnrad) pflegen. Dient nur noch als Fallback/Vorbelegung. Trennen mit Komma.
 ## Velocity-Escape (Pitfall #1)
 #set( $D = '$' )
 #set( $H = '#' )
@@ -23,6 +23,7 @@
 <div class="bp-root"
      id="bp-root-${paramGruppenbezeichnung}"
      data-page-id="$content.getId()"
+     data-page-path="$content.getUrlPath()"
      data-inst-id="${paramGruppenbezeichnung}"
      data-th-verbal="$!paramTherapeutenVerbal"
      data-th-nonverbal="$!paramTherapeutenNonVerbal">
@@ -251,9 +252,7 @@
 .bp-tb-btn svg{flex-shrink:0;display:block}
 .bp-tb-btn:hover{background:#e4e5e9}
 .bp-tb-btn:hover{background:#f0e0e2}
-.bp-versand-steps{background:#f4f5f7;border-radius:4px;padding:10px 14px;margin-bottom:14px}
-.bp-versand-step{display:flex;align-items:flex-start;gap:10px;padding:5px 0;font-size:13px}
-.bp-step-nr{background:#0052cc;color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
+.bp-perma-link{color:#0052cc;word-break:break-all}
 </style>
 
 <div id="bp-banner-${paramGruppenbezeichnung}"><!-- Banner Sprint 5 --></div>
@@ -298,10 +297,108 @@ var ROOT0    = allRoots[allRoots.length - 1]; // letztes = dieses Macro
 var pageId   = (ROOT0 && ROOT0.getAttribute('data-page-id')) ||
                (window.AJS && AJS.params && AJS.params.pageId) || '';
 var instId   = (ROOT0 && ROOT0.getAttribute('data-inst-id')) || '';
+// ── Bezugstherapeuten-Listen ──────────────────────────────────────────
+// Quelle 1 (NEU, Vorrang): state.config.thVerbal / state.config.thNonverbal
+//   -> gepflegt im Einstellungsdialog (Zahnrad), pro Seite+Instanz gespeichert.
+// Quelle 2 (ALT, Fallback): Macro-Parameter TherapeutenVerbal/-NonVerbal.
+//   -> bleibt unveraendert funktionsfaehig und belegt den Dialog vor.
+// Sobald die Einstellung einmal gespeichert wurde (auch als leere Liste),
+// gewinnt sie gegenueber dem Macro-Parameter. Leere Liste = Freitext-Eingabe.
 var _thV     = (ROOT0 && ROOT0.getAttribute('data-th-verbal'))    || '';
 var _thNV    = (ROOT0 && ROOT0.getAttribute('data-th-nonverbal')) || '';
-var thVerbalList = _thV  ? _thV.split(',').map(function(s){return s.trim();}).filter(Boolean) : [];
-var thNvList     = _thNV ? _thNV.split(',').map(function(s){return s.trim();}).filter(Boolean) : [];
+// parseThList: akzeptiert Array ODER String (Komma / Semikolon / Zeilenumbruch),
+// trimmt, entfernt Leereintraege und Duplikate (case-insensitiv, erste Schreibweise gewinnt).
+function parseThList(v){
+  var arr = Array.isArray(v) ? v : String(v==null?'':v).split(/[,;\r\n]/);
+  var seen={}, out=[];
+  arr.forEach(function(x){
+    var n=String(x==null?'':x).trim();
+    if(!n) return;
+    var k=n.toLowerCase();
+    if(seen[k]) return;
+    seen[k]=1; out.push(n);
+  });
+  return out;
+}
+var paramThVerbalList = parseThList(_thV);
+var paramThNvList     = parseThList(_thNV);
+function thListFor(cfgKey, paramList){
+  var v = (state && state.config) ? state.config[cfgKey] : undefined;
+  if (Array.isArray(v) || typeof v === 'string') return parseThList(v);
+  return paramList.slice();
+}
+function getThVerbalList(){ return thListFor('thVerbal',    paramThVerbalList); }
+function getThNvList()    { return thListFor('thNonverbal', paramThNvList); }
+// Herkunft (fuer die Hinweistexte im Einstellungsdialog)
+function thSource(cfgKey){
+  var v = (state && state.config) ? state.config[cfgKey] : undefined;
+  return (Array.isArray(v) || typeof v === 'string') ? 'settings' : 'param';
+}
+// ── Permalink auf diese Belegungsliste ────────────────────────────────
+// pageId-basierte URL = echter Permalink: bleibt gueltig, wenn die Seite
+// umbenannt oder in einen anderen Space verschoben wird.
+// Fallback-Kette: pageId -> von Velocity gerenderter Seitenpfad -> aktuelle URL.
+var _pagePath = (ROOT0 && ROOT0.getAttribute('data-page-path')) || '';
+if (_pagePath.charAt(0) === '$') _pagePath = '';   // Velocity nicht aufgeloest
+function getConfluenceBaseUrl(){
+  var m = document.getElementById('confluence-base-url');
+  var b = (m && (m.getAttribute('content') || m.content)) ||
+          (window.AJS && AJS.Meta && AJS.Meta.get && AJS.Meta.get('base-url')) ||
+          (window.AJS && AJS.params && AJS.params.baseUrl) || '';
+  b = String(b || '').replace(/\/+$/, '');
+  if (b) return b;
+  var cp = (window.AJS && AJS.contextPath) ? AJS.contextPath() : '';
+  return window.location.origin + String(cp || '').replace(/\/+$/, '');
+}
+// Kurzlink (Confluence "Teilen"-Link, z.B. /x/44RIAg). Kommt aus der REST-API
+// (_links.tinyui) und ist dieselbe URL, die Confluence im Teilen-Dialog anbietet.
+// Wird beim Init einmal geholt; bis dahin gilt die pageId-URL als Fallback —
+// beide zeigen dauerhaft auf dieselbe Seite.
+var tinyLink = '';
+function fetchTinyLink(){
+  if (!pageId) return Promise.resolve('');
+  return fetch(_actCtx() + '/rest/api/content/' + encodeURIComponent(pageId),
+               {headers:{Accept:'application/json'}})
+    .then(function(r){ if(!r.ok) throw new Error('tinyui '+r.status); return r.json(); })
+    .then(function(j){
+      var l = (j && j._links) || {};
+      if (!l.tinyui) return '';
+      var base = String(l.base || getConfluenceBaseUrl()).replace(/\/+$/, '');
+      tinyLink = base + l.tinyui;
+      console.log('[bp]', instId, 'tinyLink =', tinyLink);
+      return tinyLink;
+    })
+    .catch(function(e){ console.warn('[bp]', instId, 'tinyLink nicht verfuegbar', e); return ''; });
+}
+
+// Lange, stets funktionierende Form (Fallback und Erkennungsmuster).
+function getLongLink(){
+  var base = getConfluenceBaseUrl();
+  if (pageId)         return base + '/pages/viewpage.action?pageId=' + encodeURIComponent(pageId);
+  if (_pagePath)      return base + _pagePath;
+  return String(window.location.href).split('#')[0];
+}
+function getPermaLink(){ return tinyLink || getLongLink(); }
+// Frueher wurde ein Instanz-Anker angehaengt. Er wird nicht mehr erzeugt,
+// aber in gespeicherten Vorlagen noch erkannt und entfernt (siehe dropLinkAnchor).
+function linkAnchor(){ return '#bp-root-' + encodeURIComponent(instId); }
+// Alle bekannten Schreibweisen desselben Ziels — fuer die Dubletten-Erkennung
+// in gespeicherten Vorlagen (Kurzlink UND lange Form).
+function linkVariants(){
+  var out=[];
+  [tinyLink, getLongLink()].forEach(function(u){ if(u) out.push(u); });
+  return out;
+}
+// dropLinkAnchor: entfernt den frueher angehaengten Anker aus einem Text,
+// aber nur direkt hinter einer bekannten Link-Form.
+function dropLinkAnchor(text){
+  if(!text) return text;
+  var a=linkAnchor();
+  if(text.indexOf(a)<0) return text;
+  linkVariants().forEach(function(u){ text=text.split(u+a).join(u); });
+  return text;
+}
+
 var PROP_KEY = 'belegungsplaner_' + pageId + '_' + instId;
 var MAX_CAP       = 10;
 var WARN_CAP      = 9;
@@ -684,15 +781,18 @@ function renderTable(st, asOf){
     } else {
       statusCell=badge(st2);
     }
-    // BT-Felder: select wenn Liste konfiguriert, sonst inline-text
+    // BT-Felder: select wenn Liste konfiguriert (Einstellungen > Macro-Param),
+    // sonst inline-text. Listen werden pro Zeile frisch gelesen -> nach dem
+    // Speichern der Einstellungen sofort wirksam.
+    var _thVL = getThVerbalList(), _thNVL = getThNvList();
     var btVCell = canEdit
-      ? (thVerbalList.length
-          ? '<span class="bp-editable" data-bp-action="inline-select" data-bp-id="'+h(c.id)+'" data-bp-field="bt_verbal" data-bp-opts="'+h(thVerbalList.join('|'))+'">'+h(c.bt_verbal||'—')+'</span>'
+      ? (_thVL.length
+          ? '<span class="bp-editable" data-bp-action="inline-select" data-bp-id="'+h(c.id)+'" data-bp-field="bt_verbal" data-bp-opts="'+h(_thVL.join('|'))+'">'+h(c.bt_verbal||'—')+'</span>'
           : '<span class="bp-ec" data-bp-action="inline-edit" data-bp-id="'+h(c.id)+'" data-bp-field="bt_verbal" data-bp-type="text">'+h(c.bt_verbal||'—')+'</span>')
       : h(c.bt_verbal||'');
     var btNvCell = canEdit
-      ? (thNvList.length
-          ? '<span class="bp-editable" data-bp-action="inline-select" data-bp-id="'+h(c.id)+'" data-bp-field="bt_nonverbal" data-bp-opts="'+h(thNvList.join('|'))+'">'+h(c.bt_nonverbal||'—')+'</span>'
+      ? (_thNVL.length
+          ? '<span class="bp-editable" data-bp-action="inline-select" data-bp-id="'+h(c.id)+'" data-bp-field="bt_nonverbal" data-bp-opts="'+h(_thNVL.join('|'))+'">'+h(c.bt_nonverbal||'—')+'</span>'
           : '<span class="bp-ec" data-bp-action="inline-edit" data-bp-id="'+h(c.id)+'" data-bp-field="bt_nonverbal" data-bp-type="text">'+h(c.bt_nonverbal||'—')+'</span>')
       : h(c.bt_nonverbal||'');
     var ctx={st2:st2,vE:vE,ueD:ueD,bW:bW,editBtn:editBtn,ktCell:ktCell,kzAblauf:kzAblauf,
@@ -746,8 +846,13 @@ function disableScrollbar(){
 // ── SPRINT 3: AUFNAHME-MODAL ──────────────────────────────────────────
 function thField(id, list, val){
   if(list&&list.length){
+    // Bestehende Zuordnung darf nicht verloren gehen, wenn der Name (mehr)
+    // nicht in der konfigurierten Liste steht (z.B. nach Aenderung in den
+    // Einstellungen oder Umstieg Macro-Parameter -> Settings).
+    var all=list.slice();
+    if(val && all.indexOf(val)<0) all.push(val);
     var opts=['<option value="">\u2014 bitte w\u00e4hlen \u2014</option>'].concat(
-      list.map(function(n){return '<option value="'+h(n)+'"'+(n===val?' selected':'')+'>'+h(n)+'</option>';}));
+      all.map(function(n){return '<option value="'+h(n)+'"'+(n===val?' selected':'')+'>'+h(n)+'</option>';}));
     return '<select id="'+id+'" class="bp-input">'+opts.join('')+'</select>';
   }
   return '<input type="text" id="'+id+'" class="bp-input" value="'+h(val||'')+'" placeholder="Name eingeben">';
@@ -776,8 +881,8 @@ function openAufnahmeModal(){
     '<label class="bp-checkbox-label"><input type="checkbox" id="bp-a-goae"> Wahlleistung</label></div>'+
     '<div class="bp-field"><label>JuPsy</label>'+
     '<label class="bp-checkbox-label"><input type="checkbox" id="bp-a-jupsy"> JuPsy</label></div>'+
-    '<div class="bp-field"><label for="bp-a-btv">Bezugsth. Verbal</label>'+thField('bp-a-btv',thVerbalList,'')+'</div>'+
-    '<div class="bp-field"><label for="bp-a-btnv">Bezugsth. Non-Verbal</label>'+thField('bp-a-btnv',thNvList,'')+'</div>'+
+    '<div class="bp-field"><label for="bp-a-btv">Bezugsth. Verbal</label>'+thField('bp-a-btv',getThVerbalList(),'')+'</div>'+
+    '<div class="bp-field"><label for="bp-a-btnv">Bezugsth. Non-Verbal</label>'+thField('bp-a-btnv',getThNvList(),'')+'</div>'+
     '</div>'+
     '<div class="bp-modal-footer">'+
     '<button class="bp-btn bp-btn-primary" data-bp-action="save-aufnahme"'+(blocked?' disabled':'')+'>Aufnehmen</button>'+
@@ -849,8 +954,8 @@ function openEditModal(clientId){
     '<label class="bp-checkbox-label"><input type="checkbox" id="bp-e-goae"'+(c.goae?' checked':'')+'>Wahlleistung</label></div>'+
     '<div class="bp-field"><label>JuPsy</label>'+
     '<label class="bp-checkbox-label"><input type="checkbox" id="bp-e-jupsy"'+(c.jupsy?' checked':'')+'>JuPsy</label></div>'+
-    '<div class="bp-field"><label for="bp-e-btv">Bezugsth. Verbal</label>'+thField('bp-e-btv',thVerbalList,c.bt_verbal)+'</div>'+
-    '<div class="bp-field"><label for="bp-e-btnv">Bezugsth. Non-Verbal</label>'+thField('bp-e-btnv',thNvList,c.bt_nonverbal)+'</div>'+
+    '<div class="bp-field"><label for="bp-e-btv">Bezugsth. Verbal</label>'+thField('bp-e-btv',getThVerbalList(),c.bt_verbal)+'</div>'+
+    '<div class="bp-field"><label for="bp-e-btnv">Bezugsth. Non-Verbal</label>'+thField('bp-e-btnv',getThNvList(),c.bt_nonverbal)+'</div>'+
     '</fieldset>'+
 
     '<fieldset class="bp-section"><legend>Verl\u00e4ngerung</legend>'+
@@ -1255,20 +1360,15 @@ function openVersandModal(){
   var to=tpl.to||'aufnahme@systelios.de';
   var cc=tpl.cc||'';
   var subject=tpl.subject||getDefaultSubject();
-  var body=tpl.body||getDefaultBody();
+  var body=tpl.body?ensureLinkInBody(dropLinkAnchor(tpl.body)):getDefaultBody();
+  var linkAdded=!!(tpl.body && !bodyHasLink(tpl.body));   // Link neu eingefuegt
+  var perma=getPermaLink();
   MODAL_EL.innerHTML=
     '<div class="bp-overlay" data-bp-action="close-modal">'+
     '<div class="bp-modal bp-modal-wide" role="dialog" aria-modal="true">'+
     '<div class="bp-modal-header"><span class="bp-modal-title">&#9993; Belegungsliste versenden</span>'+
     '<button class="bp-modal-close" data-bp-action="close-modal">&times;</button></div>'+
     '<div class="bp-modal-body">'+
-    // Schritt-Anleitung
-    '<div class="bp-versand-steps">'+
-    '<div class="bp-versand-step"><span class="bp-step-nr">1</span>'+
-    '<span>PDF drucken &mdash; im Druckdialog &bdquo;Als PDF speichern&ldquo; wählen.</span></div>'+
-    '<div class="bp-versand-step"><span class="bp-step-nr">2</span>'+
-    '<span>Mail-Programm öffnen &mdash; gespeichertes PDF anhängen &mdash; senden.</span></div>'+
-    '</div>'+
     '<div class="bp-field"><label for="bp-v-to">An <span class="bp-req">*</span></label>'+
     '<input type="email" id="bp-v-to" class="bp-input" value="'+h(to)+'"></div>'+
     '<div class="bp-field"><label for="bp-v-cc">CC</label>'+
@@ -1276,27 +1376,76 @@ function openVersandModal(){
     '<div class="bp-field"><label for="bp-v-subject">Betreff</label>'+
     '<input type="text" id="bp-v-subject" class="bp-input" value="'+h(subject)+'"></div>'+
     '<div class="bp-field"><label for="bp-v-body">Nachricht</label>'+
-    '<textarea id="bp-v-body" class="bp-input" rows="7" style="resize:vertical">'+h(body)+'</textarea></div>'+
+    '<textarea id="bp-v-body" class="bp-input" rows="9" style="resize:vertical">'+h(body)+'</textarea>'+
+    '<div class="bp-hint">Permalink &mdash; derselbe Kurzlink wie im Confluence-Teilen-Dialog, bleibt nach Umbenennen/Verschieben gültig:<br>'+
+    '<a href="'+h(perma)+'" target="_blank" rel="noopener" class="bp-perma-link">'+h(perma)+'</a>'+
+    (linkAdded?'<br><strong>Hinweis:</strong> Der Link wurde in Ihre gespeicherte Vorlage eingefügt &mdash; Position frei anpassbar.':'')+
+    '</div></div>'+
     '</div>'+
     '<div class="bp-modal-footer">'+
     '<button class="bp-btn" data-bp-action="close-modal">Schließen</button>'+
     '<div style="flex:1"></div>'+
-    '<button class="bp-btn" data-bp-action="versand-print">&#128438; PDF drucken</button>'+
     '<button class="bp-btn bp-btn-primary" data-bp-action="versand-mail">&#9993; Mail öffnen</button>'+
     '</div></div></div>';
   bindEsc();
+  // Kurzlink noch nicht da? Nachladen und den bereits gerenderten Dialog
+  // in-place aktualisieren (nur solange er offen ist und unveraendert).
+  if(!tinyLink){
+    var shownBefore=perma;
+    fetchTinyLink().then(function(t){
+      if(!t) return;
+      var ta=document.getElementById('bp-v-body'); if(!ta) return;   // Dialog zu
+      ta.value=swapLink(ta.value, shownBefore, getPermaLink());
+      var a=MODAL_EL.querySelector('a.bp-perma-link');
+      if(a){ a.href=getPermaLink(); a.textContent=getPermaLink(); }
+    });
+  }
 }
 
 function getDefaultSubject(){
   return 'Belegungsliste '+instId+' — Stand '+new Date().toLocaleDateString('de-DE');
 }
 
+// Textbaustein mit dem Permalink. LINK_LABEL dient zugleich als Marker,
+// um eine bereits vorhandene Einbettung zu erkennen (keine Dubletten).
+var LINK_LABEL='Immer aktueller Stand online:';
+function getLinkBlock(){ return LINK_LABEL+'\n'+getPermaLink(); }
+
+// bodyHasLink: erkennt den Baustein am Label ODER an der URL (auch ohne Anker,
+// falls jemand den Link von Hand gekuerzt hat).
+function bodyHasLink(body){
+  if(!body) return false;
+  if(body.indexOf(LINK_LABEL)>=0) return true;
+  return linkVariants().some(function(u){ return body.indexOf(u)>=0; });
+}
+
+// ensureLinkInBody: haengt den Link-Baustein an einen gespeicherten Text an,
+// der ihn noch nicht enthaelt (Vorlagen aus der Zeit vor diesem Feature).
+// Wird eine Grussformel am Ende erkannt, wird davor eingefuegt statt dahinter.
+var GRUSS_RE=/\n[ \t]*((?:Beste|Viele|Herzliche|Liebe|Freundliche)\s+Gr(?:ü|ue)(?:ß|ss)e|Mit\s+freundlichen\s+Gr(?:ü|ue)(?:ß|ss)en|LG|VG|MfG)\b[\s\S]*$/;
+function ensureLinkInBody(body){
+  if(bodyHasLink(body)) return body;
+  var block=getLinkBlock();
+  if(!body || !body.trim()) return block;
+  var m=body.match(GRUSS_RE);
+  if(m) return body.slice(0, m.index).replace(/\s+$/,'')+'\n\n'+block+'\n'+m[0];
+  return body.replace(/\s+$/,'')+'\n\n'+block;
+}
+
+// swapLink: ersetzt eine bereits eingesetzte lange Form durch den Kurzlink,
+// falls dieser erst nach dem Rendern des Dialogs verfuegbar wurde.
+function swapLink(text, fromUrl, toUrl){
+  if(!text || !fromUrl || !toUrl || fromUrl===toUrl) return text;
+  return text.split(fromUrl).join(toUrl);
+}
+
 function getDefaultBody(){
   var ac=getActiveCount(state.clients);
   return 'Liebe Kollegin, lieber Kollege,\n\n'+
-    'anbei die aktuelle Belegungsliste '+instId+'.\n\n'+
+    'hier der Link zur Belegungsliste '+instId+'.\n\n'+
     'Stand: '+new Date().toLocaleDateString('de-DE')+'\n'+
     'Aktive Klienten: '+ac+'\n\n'+
+    getLinkBlock()+'\n\n'+
     'Bei Rückfragen einfach melden.\n\nBeste Grüße';
 }
 
@@ -1443,6 +1592,7 @@ var SELFTEST = {
     this.snap = null;
     // Re-Render mit echten Daten
     renderTable(state); renderBanner(state);
+    applyViewCSS();   // Spalten-Sichtbarkeit des ECHTEN States wiederherstellen
     return origJson;
   },
 
@@ -1464,6 +1614,79 @@ var SELFTEST = {
     t.assertEq('Unit','getEntscheidungsGrenze: aus config', getEntscheidungsGrenze(), 21);
     state.config = {};
     t.assertEq('Unit','getEntscheidungsGrenze: Default 17', getEntscheidungsGrenze(), 17);
+    // ── Bezugstherapeuten: Settings > Macro-Parameter ──
+    var _bakPV=paramThVerbalList.slice(), _bakPNV=paramThNvList.slice();
+    paramThVerbalList=['Anna','Bert']; paramThNvList=['Cara'];
+    state.config = {};
+    t.assertEq('Unit','Therapeuten: Fallback auf Macro-Parameter (verbal)',
+               getThVerbalList().join(','), 'Anna,Bert');
+    t.assertEq('Unit','Therapeuten: Fallback auf Macro-Parameter (non-verbal)',
+               getThNvList().join(','), 'Cara');
+    t.assertEq('Unit','Therapeuten: Herkunft = param', thSource('thVerbal'), 'param');
+    state.config = {thVerbal:['Xenia','Yves']};
+    t.assertEq('Unit','Therapeuten: Settings haben Vorrang',
+               getThVerbalList().join(','), 'Xenia,Yves');
+    t.assertEq('Unit','Therapeuten: Herkunft = settings', thSource('thVerbal'), 'settings');
+    t.assertEq('Unit','Therapeuten: non-verbal weiterhin Parameter-Fallback',
+               getThNvList().join(','), 'Cara');
+    state.config = {thVerbal:[]};
+    t.assertEq('Unit','Therapeuten: leere Settings-Liste gewinnt (Freitext)',
+               getThVerbalList().length, 0);
+    t.assertEq('Unit','parseThList: Komma/Semikolon/Zeilenumbruch',
+               parseThList('Anna, Bert;Cara\nDoro').join('|'), 'Anna|Bert|Cara|Doro');
+    t.assertEq('Unit','parseThList: trimmt, entfernt Leere + Duplikate',
+               parseThList([' Anna ','','anna','Bert']).join('|'), 'Anna|Bert');
+    t.log('Unit','thField: unbekannter Bestandswert bleibt als Option erhalten',
+          thField('x',['Anna'],'Zoe').indexOf('>Zoe<')>=0);
+    t.log('Unit','thField: leere Liste → Freitext-Input',
+          thField('x',[],'Zoe').indexOf('<input')>=0);
+    paramThVerbalList=_bakPV; paramThNvList=_bakPNV;
+
+    // ── Permalink / Mail-Einbettung ──
+    var _pl=getPermaLink();
+    t.log('Unit','getPermaLink: absolute http(s)-URL', /^https?:\/\//.test(_pl));
+    t.log('Unit','getPermaLink: Kurzlink /x/ oder lange Form',
+          _pl.indexOf('/x/')>=0 || _pl.indexOf('pageId=')>=0 || _pl.indexOf('/display/')>=0);
+    t.log('Unit','getLongLink: immer verfügbare Fallback-Form', /^https?:\/\//.test(getLongLink()));
+    t.log('Unit','linkVariants: enthält lange Form (Dubletten-Erkennung)',
+          linkVariants().indexOf(getLongLink())>=0);
+    t.log('Unit','bodyHasLink: erkennt auch alte Fassung mit Anker',
+          bodyHasLink('alt: '+getLongLink()+linkAnchor()));
+    t.assertEq('Unit','swapLink: ersetzt lange Form durch Kurzlink',
+               swapLink('Siehe http://a/lang hier','http://a/lang','http://a/x/AB'),
+               'Siehe http://a/x/AB hier');
+    t.assertEq('Unit','swapLink: identische URLs → unverändert',
+               swapLink('Text','http://a','http://a'), 'Text');
+    t.log('Unit','bodyHasLink: erkennt auch die lange Form',
+          bodyHasLink('siehe '+getLongLink()));
+    t.log('Unit','getPermaLink: ohne Anker', _pl.indexOf('#')<0);
+    t.assertEq('Unit','dropLinkAnchor: entfernt alten Anker hinter dem Link',
+               dropLinkAnchor('Siehe '+getLongLink()+linkAnchor()+' — Ende'),
+               'Siehe '+getLongLink()+' — Ende');
+    t.assertEq('Unit','dropLinkAnchor: Text ohne Anker unverändert',
+               dropLinkAnchor('Nur Text.'), 'Nur Text.');
+    t.log('Unit','dropLinkAnchor: fremde Fragmente bleiben stehen',
+          dropLinkAnchor('http://andere/seite#abschnitt').indexOf('#abschnitt')>=0);
+    t.log('Unit','getLinkBlock: Label + URL', getLinkBlock().indexOf(_pl)>=0 && getLinkBlock().indexOf(LINK_LABEL)>=0);
+    t.log('Unit','getDefaultBody: Permalink eingebettet', getDefaultBody().indexOf(_pl)>=0);
+    t.log('Unit','getDefaultBody: kein PDF-Anhang mehr angekündigt',
+          getDefaultBody().indexOf('PDF')<0 && getDefaultBody().indexOf('anbei')<0);
+    t.log('Unit','bodyHasLink: erkennt Label', bodyHasLink('bla\n'+LINK_LABEL+'\nirgendwas'));
+    t.log('Unit','bodyHasLink: erkennt URL ohne Anker', bodyHasLink('siehe '+_pl.split('#')[0]));
+    t.log('Unit','bodyHasLink: leerer Text → false', bodyHasLink('')===false);
+    t.assertEq('Unit','ensureLinkInBody: idempotent (kein zweiter Block)',
+               ensureLinkInBody(ensureLinkInBody('Text\n\nBeste Grüße')),
+               ensureLinkInBody('Text\n\nBeste Grüße'));
+    var _mig=ensureLinkInBody('Hallo,\n\nanbei die Liste.\n\nBeste Grüße\nCarsten');
+    t.log('Unit','ensureLinkInBody: Link vor der Grußformel eingefügt',
+          _mig.indexOf(_pl)>=0 && _mig.indexOf(_pl)<_mig.indexOf('Beste Grüße'));
+    t.log('Unit','ensureLinkInBody: Grußformel bleibt erhalten',
+          _mig.indexOf('Beste Grüße\nCarsten')>=0);
+    t.log('Unit','ensureLinkInBody: ohne Grußformel → am Ende',
+          ensureLinkInBody('Nur ein Satz.').indexOf(_pl)>0);
+    t.assertEq('Unit','ensureLinkInBody: leerer Text → nur Link-Block',
+               ensureLinkInBody(''), getLinkBlock());
+
     state.config = {entscheidungsGrenze: 17}; // reset für Status-Tests
 
     // getActiveCount: 7 von 8 (entlassen ausgeschlossen)
@@ -1678,6 +1901,94 @@ var SELFTEST = {
       // Status nach dem Klick
       t.assertEq('Integration','Status nach Klick: verl_beantragt', computeStatus(after, fix.today).code, 'verl_beantragt');
     }
+
+    // ── Test: Einstellungsdialog — Therapeuten-Felder vorbelegt + Speichern ──
+    state = JSON.parse(JSON.stringify(fix.state));
+    var _ibakPV=paramThVerbalList.slice();
+    paramThVerbalList=['Anna','Bert'];
+    delete state.config.thVerbal; delete state.config.thNonverbal;
+    openSettingsModal();
+    var thvIn=document.getElementById('bp-s-thv');
+    t.log('Integration','Einstellungen: Feld Therapeuten verbal vorhanden', !!thvIn);
+    if(thvIn){
+      t.assertEq('Integration','Einstellungen: vorbelegt aus Macro-Parameter (kommasepariert)',
+                 thvIn.value, 'Anna, Bert');
+      t.log('Integration','Einstellungen: einzeiliges Textfeld (kein Textarea)',
+            thvIn.tagName==='INPUT' && thvIn.type==='text');
+      thvIn.value='Anna, Bert, Carla';
+      handleSaveSettings();
+      t.assertEq('Integration','Einstellungen: Speichern schreibt config.thVerbal',
+                 (state.config.thVerbal||[]).join(','), 'Anna,Bert,Carla');
+      t.assertEq('Integration','Einstellungen: Settings gewinnen nach dem Speichern',
+                 getThVerbalList().join(','), 'Anna,Bert,Carla');
+    }
+    closeModal();
+    paramThVerbalList=_ibakPV;
+    renderTable(state);
+
+    // ── Test: Versand-Dialog — Permalink im Nachrichtentext ──
+    state = JSON.parse(JSON.stringify(fix.state));
+    state.mailTemplate = {};
+    openVersandModal();
+    var vBody=document.getElementById('bp-v-body');
+    t.log('Integration','Versand: Nachrichtenfeld vorhanden', !!vBody);
+    if(vBody) t.log('Integration','Versand: Permalink im Default-Text',
+                    vBody.value.indexOf(getPermaLink())>=0);
+    t.log('Integration','Versand: Permalink als klickbarer Hinweis im Dialog',
+          !!MODAL_EL.querySelector('a.bp-perma-link'));
+    t.log('Integration','Versand: keine Schritt-Anleitung mehr im Dialog',
+          !MODAL_EL.querySelector('.bp-versand-steps'));
+    t.log('Integration','Versand: kein PDF-drucken-Button mehr',
+          !MODAL_EL.querySelector('[data-bp-action="versand-print"]'));
+    t.log('Integration','Drucken bleibt in der Titelzeile erreichbar',
+          !!ROOT.querySelector('[data-bp-action="print"]'));
+    closeModal();
+
+    // Gespeicherte Vorlage ohne Link wird einmalig ergänzt
+    state.mailTemplate = {to:'x@y.de', subject:'Alt', body:'Hallo,\n\nanbei.\n\nBeste Grüße'};
+    openVersandModal();
+    var vBody2=document.getElementById('bp-v-body');
+    if(vBody2){
+      t.log('Integration','Versand: alte Vorlage um Permalink ergänzt',
+            vBody2.value.indexOf(getPermaLink())>=0);
+      t.log('Integration','Versand: eigener Vorlagentext bleibt erhalten',
+            vBody2.value.indexOf('anbei.')>=0 && vBody2.value.indexOf('Beste Grüße')>=0);
+    }
+    closeModal();
+
+    // Alte Vorlage mit Anker: Anker wird entfernt, kein zweiter Block
+    state.mailTemplate = {to:'x@y.de', body:'Hallo.\n\n'+LINK_LABEL+'\n'+getLongLink()+linkAnchor()+'\n\nBeste Grüße'};
+    openVersandModal();
+    var vBody3=document.getElementById('bp-v-body');
+    if(vBody3){
+      t.log('Integration','Versand: alter Anker aus Vorlage entfernt',
+            vBody3.value.indexOf(linkAnchor())<0);
+      t.log('Integration','Versand: kein zweiter Link-Block',
+            vBody3.value.split(LINK_LABEL).length===2);
+    }
+    closeModal();
+    state.mailTemplate = {};
+    renderTable(state);
+
+    // ── Test: Kurzlink-Auswertung der REST-Antwort (ohne echten Call) ──
+    var _bakTiny=tinyLink, _bakFetch=window.fetch;
+    tinyLink='';
+    var _longBefore=getPermaLink();
+    window.fetch=function(){ return Promise.resolve({ok:true, json:function(){
+      return Promise.resolve({_links:{base:'http://intranet.example/c', tinyui:'/x/44RIAg'}});
+    }}); };
+    var _asyncDone=false;
+    fetchTinyLink().then(function(){
+      _asyncDone=true;
+      t.log('Integration','Kurzlink: aus _links.base + _links.tinyui gebaut',
+            tinyLink==='http://intranet.example/c/x/44RIAg');
+      t.log('Integration','Kurzlink: getPermaLink nutzt ihn ohne Anker',
+            getPermaLink()==='http://intranet.example/c/x/44RIAg');
+      t.log('Integration','Kurzlink: lange Form bleibt als Variante erkannt',
+            bodyHasLink('alt: '+_longBefore));
+      window.fetch=_bakFetch; tinyLink=_bakTiny;
+    });
+    t.log('Integration','Kurzlink: Abruf blockiert die UI nicht', _asyncDone===false);
 
     // ── Test: applyPatch ändert Feld + Re-Render produziert DOM ──
     state = JSON.parse(JSON.stringify(fix.state));
@@ -2025,8 +2336,20 @@ var SELFTEST = {
 };
 
 // ── SETTINGS ────────────────────────────────────────────────────────
+// thSrcHint: erklaert, woher die aktuell angezeigte Liste stammt.
+function thSrcHint(cfgKey, paramList){
+  if(thSource(cfgKey)==='settings')
+    return 'Quelle: <strong>Einstellungen</strong> (hat Vorrang vor dem Macro-Parameter).';
+  if(paramList.length)
+    return 'Quelle: <strong>Macro-Parameter</strong> (veraltet) &mdash; hier vorbelegt. '+
+           'Nach dem Speichern gilt die Einstellung und hat Vorrang.';
+  return 'Noch nicht gepflegt. Leer lassen &rarr; Freitext statt Auswahlliste.';
+}
+
 function openSettingsModal(){
   var grenze=getEntscheidungsGrenze();
+  var thvVal =getThVerbalList().join(', ');
+  var thnvVal=getThNvList().join(', ');
   MODAL_EL.innerHTML=
     '<div class="bp-overlay" data-bp-action="close-modal">'+
     '<div class="bp-modal" role="dialog" aria-modal="true">'+
@@ -2038,6 +2361,20 @@ function openSettingsModal(){
     '<input type="number" id="bp-s-grenze" class="bp-input" min="1" max="365" value="'+grenze+'">'+
     '<div class="bp-hint">Ab wie vielen Tagen vor dem vorl. Entlassdatum soll das <strong>Entscheidung</strong>-Badge erscheinen? Standard: 17 Tage.</div>'+
     '</div>'+
+    '<div class="bp-field">'+
+    '<label for="bp-s-thv">Bezugstherapeut:innen &mdash; verbal</label>'+
+    '<input type="text" id="bp-s-thv" class="bp-input" '+
+      'placeholder="Namen mit Komma trennen, z.B. Anna Meier, Bert Klein" value="'+h(thvVal)+'">'+
+    '<div class="bp-hint">'+thSrcHint('thVerbal', paramThVerbalList)+'</div>'+
+    '</div>'+
+    '<div class="bp-field">'+
+    '<label for="bp-s-thnv">Bezugstherapeut:innen &mdash; non-verbal</label>'+
+    '<input type="text" id="bp-s-thnv" class="bp-input" '+
+      'placeholder="Namen mit Komma trennen, z.B. Cara Roth" value="'+h(thnvVal)+'">'+
+    '<div class="bp-hint">'+thSrcHint('thNonverbal', paramThNvList)+'</div>'+
+    '</div>'+
+    '<div class="bp-hint" style="margin:-4px 0 12px">Gepflegte Listen erscheinen als Auswahlfeld in Aufnahme, Bearbeiten und in der Tabelle. '+
+    'Bereits zugeordnete Namen bleiben erhalten, auch wenn sie nicht mehr in der Liste stehen.</div>'+
     '<div class="bp-field"><label>Sichtbare Spalten (Anzeige)</label>'+
     '<div style="display:flex;flex-wrap:wrap">'+buildColToggles(state.viewCols, false, 'bp-view-col-cb')+'</div>'+
     '<div class="bp-hint">Status und Name sind immer sichtbar. Wirkt nur auf die Bildschirm-Anzeige (Druck separat im Druckdialog).</div></div>'+
@@ -2060,13 +2397,22 @@ function handleSaveSettings(){
   state.config=state.config||{};
   var bakG=state.config.entscheidungsGrenze;
   var bakV=state.viewCols;
+  var hadThV=('thVerbal'    in state.config), bakThV =state.config.thVerbal;
+  var hadThNV=('thNonverbal' in state.config), bakThNV=state.config.thNonverbal;
   state.config.entscheidungsGrenze=v;
+  // Bezugstherapeuten: ab jetzt Einstellung (hat Vorrang vor Macro-Parameter).
+  var thvEl =document.getElementById('bp-s-thv');
+  var thnvEl=document.getElementById('bp-s-thnv');
+  if(thvEl)  state.config.thVerbal    = parseThList(thvEl.value);
+  if(thnvEl) state.config.thNonverbal = parseThList(thnvEl.value);
   state.viewCols=readColToggles('bp-view-col-cb');
   closeModal();
   renderTable(state);renderBanner(state);
   applyViewCSS();
   saveState(state, {replay: replaySetTop({config: state.config, viewCols: state.viewCols})}).then(function(){setStatus('Einstellungen gespeichert.');}).catch(function(e){
     state.config.entscheidungsGrenze=bakG;state.viewCols=bakV;
+    if(hadThV)  state.config.thVerbal=bakThV;     else delete state.config.thVerbal;
+    if(hadThNV) state.config.thNonverbal=bakThNV; else delete state.config.thNonverbal;
     renderTable(state);renderBanner(state);applyViewCSS();
     setStatus('Fehler: '+e.message,true);
   });
@@ -2609,7 +2955,6 @@ ROOT.addEventListener('click',function(e){
       case 'add':             openAufnahmeModal(); break;
       case 'print':           openPrintModal(); break;
       case 'confirm-print':   handleConfirmPrint(); break;
-      case 'versand-print':   openPrintModal(); break;
       case 'versand':          openVersandModal(); break;
       case 'settings':         openSettingsModal(); break;
       case 'save-settings':    handleSaveSettings(); break;
@@ -2658,6 +3003,9 @@ ROOT.addEventListener('click',function(e){
         var field3=t.getAttribute('data-bp-field');
         var opts3=(t.getAttribute('data-bp-opts')||'').split('|').filter(Boolean);
         var cl3=state.clients.find(function(x){return x.id===id;}); if(!cl3)break;
+        // Bestandswert erhalten, auch wenn er nicht (mehr) in der Liste steht
+        var cur3=cl3[field3]||'';
+        if(cur3 && opts3.indexOf(cur3)<0) opts3.push(cur3);
         var sel=document.createElement('select');
         sel.className='bp-inline-input';
         sel.innerHTML='<option value="">—</option>'+opts3.map(function(o){
@@ -2692,6 +3040,7 @@ ROOT.addEventListener('click',function(e){
 // ── INIT ──────────────────────────────────────────────────────────────
 function init(){
   console.log('[bp]', instId, 'init start, pageId=', pageId);
+  fetchTinyLink();   // nicht blockierend — Fallback greift, bis er da ist
   Promise.all([checkCanEdit(),loadState()]).then(function(){
     applyAuthUI();
     checkAdminGroup().then(function(a){ isAdmin=a; applyAdminUI(); });
@@ -2712,7 +3061,9 @@ window._bp[instId]={
   loadState:loadState, saveState:saveState,
   getState:function(){return state;},
   canEdit:function(){return canEdit;},
-  thVerbalList:thVerbalList, thNvList:thNvList,
+  getPermaLink:getPermaLink, getLongLink:getLongLink, fetchTinyLink:fetchTinyLink,
+  getThVerbalList:getThVerbalList, getThNvList:getThNvList,
+  paramThVerbalList:paramThVerbalList, paramThNvList:paramThNvList,
   refresh:function(){renderTable(state);renderBanner(state);},
   activity:ACTIVITY, diagnoseActivity:diagnoseActivityEndpoint
 };
@@ -2764,8 +3115,14 @@ Nicht editierbar: <em>vorl.&nbsp;Entlassdatum</em> und <em>&Uuml;-Gruppe&nbsp;Da
 <ol>
   <li>Zahnrad-Schaltfl&auml;che <strong>&#9881;</strong> (Titelzeile) klicken.</li>
   <li><em>Entscheidungsgrenze (Tage)</em> festlegen &mdash; ab wie vielen Tagen vor dem vorl.&nbsp;Entlassdatum das <strong>Entscheidung</strong>-Badge erscheint (1&ndash;365, Standard&nbsp;17).</li>
-  <li><strong>Speichern</strong> &mdash; Statusberechnung und Banner aktualisieren sich sofort.</li>
+  <li><em>Bezugstherapeut:innen &mdash; verbal / non-verbal</em> pflegen: Namen mit <strong>Komma</strong> trennen (Semikolon geht auch).<br>
+      &rArr; Gepflegte Listen erscheinen als <strong>Auswahlfeld</strong> in Aufnahme, Bearbeiten und direkt in der Tabelle. Leere Liste&nbsp;&rarr; Freitext-Eingabe.</li>
+  <li><strong>Speichern</strong> &mdash; Statusberechnung, Banner und Auswahllisten aktualisieren sich sofort.</li>
 </ol>
+<p><strong>Hinweis zu den Macro-Parametern:</strong> Die Parameter <em>TherapeutenVerbal</em> / <em>TherapeutenNonVerbal</em> sind <em>veraltet</em>, funktionieren aber weiterhin.
+Solange die Einstellung nie gespeichert wurde, gelten die Parameter; der Dialog ist damit vorbelegt.
+Nach dem ersten Speichern hat die <strong>Einstellung Vorrang</strong> &mdash; auch wenn sie bewusst leer gelassen wird.
+Bereits zugeordnete Namen bleiben in jedem Fall erhalten, selbst wenn sie nicht mehr in der Liste stehen.</p>
 
 <h4>Drucken / PDF</h4>
 <ol>
@@ -2777,10 +3134,15 @@ Nicht editierbar: <em>vorl.&nbsp;Entlassdatum</em> und <em>&Uuml;-Gruppe&nbsp;Da
 <h4>Versand</h4>
 <ol>
   <li>Schaltfl&auml;che <strong>&#9993;&nbsp;Versand</strong> klicken.</li>
-  <li>Schritt&nbsp;1: <em>PDF drucken</em> (s.&nbsp;oben) und im Downloads-Ordner speichern.</li>
-  <li>Schritt&nbsp;2: <em>Mail&nbsp;&ouml;ffnen</em> &mdash; Mail-Programm startet mit vorbef&uuml;lltem Empf&auml;nger/Betreff.<br>
-      Gespeichertes PDF anh&auml;ngen und senden.</li>
+  <li>Empf&auml;nger, Betreff und Nachricht pr&uuml;fen &mdash; die Angaben werden als Vorlage gespeichert.</li>
+  <li><em>Mail&nbsp;&ouml;ffnen</em> &mdash; das Mail-Programm startet mit vorbef&uuml;lltem Empf&auml;nger, Betreff und Text und senden.</li>
 </ol>
+<p>Versendet wird der <strong>Link</strong>, kein PDF-Anhang &mdash; Empf&auml;nger:innen sehen darüber immer den aktuellen Stand.
+Ein PDF l&auml;sst sich weiterhin jederzeit &uuml;ber <strong>&#128438;&nbsp;Drucken</strong> in der Titelzeile erzeugen.</p>
+<p>Verwendet wird der <strong>Kurzlink</strong> aus dem Confluence-Teilen-Dialog (Form <code>&hellip;/x/44RIAg</code>), den das Macro &uuml;ber die REST-Schnittstelle abruft.
+Er bleibt g&uuml;ltig, wenn die Seite umbenannt oder verschoben wird; der Anker dahinter springt direkt zur jeweiligen Gruppe.
+Steht der Kurzlink ausnahmsweise nicht zur Verf&uuml;gung, wird automatisch die lange <em>pageId</em>-URL eingesetzt &mdash; dasselbe Ziel.
+Er steht als normaler Text in der Nachricht und kann verschoben oder gel&ouml;scht werden. Bereits gespeicherte Vorlagen werden beim n&auml;chsten &Ouml;ffnen einmalig um den Link erg&auml;nzt.</p>
 
 </div>
 </details>
@@ -2810,5 +3172,3 @@ details[open] .bp-guide-summary::before{content:'\25bc\00a0'}
 
 #end
 ## Ende #if(${paramGruppenbezeichnung})
-
-
