@@ -1,0 +1,13 @@
+{
+  "name": "belegios",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Belegungsplaner – Confluence User Macro (Velocity + Inline-JS)",
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "devDependencies": {
+    "jsdom": "24.1.3",
+    "velocityjs": "2.1.7"
+  }
+}

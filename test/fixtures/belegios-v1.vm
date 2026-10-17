@@ -1,0 +1,3174 @@
+## Macro title: Belegungsplaner
+## Macro has a body: N
+## Body processing: Selected body processing option
+## Output: Selected output option
+##
+## Developed by: Carsten Wittenberg
+## Date created: dd/mm/yyyy
+## @param Gruppenbezeichnung:title=Gruppenbezeichnung|type=string|required=true|desc=Name der Gruppe die zu planen ist.
+## @param TherapeutenVerbal:title=TherapeutenVerbal|type=string|required=false|desc=VERALTET - jetzt in den Einstellungen (Zahnrad) pflegen. Dient nur noch als Fallback/Vorbelegung. Trennen mit Komma.
+## @param TherapeutenNonVerbal:title=TherapeutenNonVerbal|type=string|required=false|desc=VERALTET - jetzt in den Einstellungen (Zahnrad) pflegen. Dient nur noch als Fallback/Vorbelegung. Trennen mit Komma.
+## Velocity-Escape (Pitfall #1)
+#set( $D = '$' )
+#set( $H = '#' )
+
+#if( !$paramGruppenbezeichnung || $paramGruppenbezeichnung == '' )
+<div style="color:#c00;border:2px solid #c00;padding:8px 12px;border-radius:3px;font-family:sans-serif">
+  <strong>Belegungsplaner:</strong> Parameter <em>Gruppenbezeichnung</em> fehlt.
+  Bitte Macro bearbeiten und den Parameter setzen (z.&nbsp;B. &ldquo;gruppe5&rdquo;).
+</div>
+#else
+
+<!-- BEGIN BELEGUNGSPLANER $paramGruppenbezeichnung -->
+<div class="bp-root"
+     id="bp-root-${paramGruppenbezeichnung}"
+     data-page-id="$content.getId()"
+     data-page-path="$content.getUrlPath()"
+     data-inst-id="${paramGruppenbezeichnung}"
+     data-th-verbal="$!paramTherapeutenVerbal"
+     data-th-nonverbal="$!paramTherapeutenNonVerbal">
+
+<style>
+/* Pitfall #6: style im Macro-Body, nicht im head */
+/* Pitfall #10: display:table-* !important gegen Confluence-CSS-Resets */
+.bp-root{font-family:-apple-system,Segoe UI,sans-serif;font-size:14px;color:#172b4d;position:relative}
+.bp-root table{display:table !important;width:100%;border-collapse:collapse}
+.bp-root thead{display:table-header-group !important}
+.bp-root tbody{display:table-row-group !important}
+.bp-root tr{display:table-row !important;overflow:visible !important;position:static !important}
+.bp-root td,.bp-root th{display:table-cell !important;padding:5px 8px;border-bottom:1px solid #dfe1e6;vertical-align:middle;white-space:nowrap}
+.bp-root td.bp-detail{white-space:normal;min-width:120px}
+/* Sticky (Pitfall #9: kein overflow:hidden auf Vorfahren) */
+.bp-table-wrap{overflow-x:auto;overflow-y:auto;max-height:72vh;position:relative}
+.bp-table{table-layout:auto;min-width:1100px}
+.bp-table thead th{position:sticky;top:0;background:#f4f5f7;z-index:2;font-weight:600;font-size:12px;text-align:left;border-bottom:2px solid #c1c7d0;white-space:nowrap}
+.bp-table thead th.bp-sticky-col{z-index:3}
+.bp-table thead th.bp-sortable{cursor:pointer;user-select:none}
+.bp-table thead th.bp-sortable:hover{background:#e9ebef}
+.bp-table thead th.bp-sorted{color:#0052cc;background:#e9ebef}
+.bp-table td.bp-sticky-col,.bp-table th.bp-sticky-col{position:sticky;left:0;background:inherit;z-index:1;box-shadow:2px 0 4px -2px rgba(0,0,0,.15)}
+.bp-table tbody tr{background:#fff}
+.bp-table tbody tr:nth-child(even){background:#fafbfc}
+.bp-table tbody tr:hover{background:#f0f4ff}
+/* Entlassene: komplett ausblenden */
+.bp-table tbody tr.bp-row-entlassen{display:none !important}
+/* Wartungs-Ansicht: entlassene Zeilen einblenden (dezent markiert) */
+.bp-root.bp-show-entlassen .bp-table tbody tr.bp-row-entlassen{display:table-row !important}
+.bp-root.bp-show-entlassen .bp-table tbody tr.bp-row-entlassen td{color:#97a0af;background:#fff7f5 !important}
+.bp-root.bp-show-entlassen .bp-table tbody tr.bp-row-entlassen td.bp-sticky-col{font-style:italic}
+.bp-entlassen-toggle{color:#fff;cursor:pointer;text-decoration:underline;font-weight:600}
+.bp-entlassen-toggle:hover{color:#ffd9dd}
+.bp-screen-only{display:inline}
+/* Ü-Gruppe: nur Namensspalte grau */
+.bp-table tr.bp-row-in_ue_gruppe td{color:#97a0af}
+.bp-table tr.bp-row-in_ue_gruppe td.bp-sticky-col{color:#97a0af;font-style:italic}
+/* Geplante (zukünftige) Aufnahmen: sichtbar, dezent blau; zählen nicht ins Kontingent */
+.bp-table tr.bp-row-aufnahme_geplant td{color:#5e6c84;background:#f0f6ff}
+.bp-table tr.bp-row-aufnahme_geplant td.bp-sticky-col{color:#5e6c84;font-style:italic;background:#f0f6ff}
+.bp-center{text-align:center}
+.bp-na{color:#aaa}
+/* Badges */
+.bp-badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700;line-height:1.5;white-space:nowrap}
+/* Toolbar */
+.bp-toolbar{display:flex;gap:6px;padding:6px 0;flex-wrap:wrap;align-items:center}
+/* Buttons */
+.bp-btn{padding:5px 12px;border:1px solid #c1c7d0;background:#f4f5f7;cursor:pointer;border-radius:3px;font-size:13px;font-family:inherit;color:#172b4d;line-height:1.4}
+.bp-btn:hover{background:#e4e5e9}
+.bp-btn:disabled{opacity:.4;cursor:not-allowed}
+.bp-btn-primary{background:#0052cc;color:#fff;border-color:#0052cc}
+.bp-btn-primary:hover:not(:disabled){background:#0747a6}
+.bp-btn-danger{background:#de350b;color:#fff;border-color:#de350b}
+.bp-btn-danger:hover:not(:disabled){background:#bf2600}
+.bp-btn-sm{padding:3px 8px;font-size:12px}
+.bp-row-action{background:none;border:1px solid transparent;cursor:pointer;font-size:15px;padding:1px 5px;border-radius:3px;color:#5e6c84;line-height:1}
+.bp-row-action:hover{background:#f4f5f7;border-color:#dfe1e6;color:#172b4d}
+/* Status + capacity */
+.bp-status{position:absolute;top:6px;left:50%;transform:translate(-50%,-10px);z-index:50;font-size:12px;padding:8px 16px;border-radius:6px;opacity:0;pointer-events:none;white-space:nowrap;max-width:90%;box-shadow:0 4px 14px rgba(9,30,66,.18);transition:opacity .3s ease,transform .3s ease;box-sizing:border-box}
+.bp-status.bp-status-visible{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+.bp-status.bp-status-ok{background:#e3fcef;border:1px solid #57d9a3;color:#006644;font-weight:600}
+.bp-status.bp-status-error{background:#ffebe6;border:1px solid #ff8f73;color:#bf2600;font-weight:600}
+.bp-status.bp-status-info{background:#deebff;border:1px solid #4c9aff;color:#0747a6}
+.bp-readonly-hint{font-size:12px;color:#97a0af;font-style:italic;padding:4px 0 6px}
+.bp-capacity{font-size:12px;color:#5e6c84;padding:4px 0 2px}
+/* Banner (Sprint 5) */
+.bp-banner{background:#fff7e6;border:1px solid #ffab00;border-radius:4px;padding:10px 14px;margin-bottom:10px}
+.bp-banner-title{font-weight:700;color:#974f0c;margin-bottom:6px;font-size:13px}
+.bp-banner-item{display:flex;align-items:center;gap:8px;padding:4px 0;flex-wrap:wrap}
+.bp-banner-item.bp-banner-overdue .bp-banner-name{color:#de350b}
+.bp-banner-name{font-weight:600;min-width:160px}
+.bp-banner-days{font-size:12px;color:#5e6c84;min-width:130px}
+/* Konkurrenz: Update-Hinweis-Banner */
+.bp-update-banner{display:none;align-items:center;gap:12px;background:#deebff;border:1px solid #4c9aff;border-radius:4px;padding:8px 14px;margin-bottom:10px;font-size:13px;color:#0747a6}
+.bp-update-text{flex:1;font-weight:600}
+/* Modal */
+.bp-overlay{position:fixed;inset:0;background:rgba(9,30,66,.5);z-index:9999;display:flex;align-items:center;justify-content:center}
+.bp-modal{background:#fff;border-radius:4px;box-shadow:0 8px 32px rgba(9,30,66,.35);width:540px;max-width:95vw;max-height:90vh;display:flex;flex-direction:column;overflow:hidden}
+.bp-modal-wide{width:660px}
+.bp-modal-sm{width:380px}
+.bp-modal-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px 10px;border-bottom:1px solid #dfe1e6;flex-shrink:0}
+.bp-modal-title{font-weight:700;font-size:15px}
+.bp-modal-close{background:none;border:none;font-size:20px;cursor:pointer;color:#6b778c;line-height:1;padding:0 2px}
+.bp-modal-close:hover{color:#172b4d}
+.bp-modal-body{padding:16px 18px;overflow-y:auto;flex:1}
+.bp-modal-footer{display:flex;gap:8px;padding:10px 18px 14px;border-top:1px solid #dfe1e6;flex-shrink:0;align-items:center}
+/* Form */
+.bp-section{border:1px solid #dfe1e6;border-radius:3px;margin-bottom:12px;padding:10px 14px 6px}
+.bp-section legend{font-weight:700;font-size:12px;color:#5e6c84;text-transform:uppercase;letter-spacing:.04em;padding:0 4px}
+.bp-field{margin-bottom:10px}
+.bp-field label{display:block;font-size:12px;font-weight:600;margin-bottom:3px;color:#5e6c84}
+.bp-input{width:100%;box-sizing:border-box;padding:6px 8px;border:2px solid #dfe1e6;border-radius:3px;font-size:13px;font-family:inherit;color:#172b4d}
+.bp-input:focus{outline:none;border-color:#4c9aff}
+.bp-input.bp-input-error{border-color:#de350b}
+.bp-field-error{color:#de350b;font-size:11px;margin-top:3px}
+.bp-req{color:#de350b}
+.bp-hint{font-size:11px;color:#97a0af;margin-top:3px;line-height:1.4}
+.bp-hint-workflow{font-size:11px;color:#5e6c84;background:#f4f5f7;padding:6px 8px;border-radius:3px;margin-bottom:8px;line-height:1.5}
+.bp-checkbox-label{display:flex;align-items:flex-start;gap:6px;cursor:pointer;font-size:13px;font-weight:400;color:#172b4d}
+.bp-checkbox-label input[type=checkbox]{margin-top:2px;flex-shrink:0}
+.bp-alert{padding:8px 12px;border-radius:3px;font-size:12px;margin-bottom:10px}
+.bp-alert-error{background:#ffebe6;border:1px solid #ff8f73;color:#bf2600}
+.bp-alert-warn{background:#fffae6;border:1px solid #ffe380;color:#974f0c}
+.bp-modal-mount:empty::before{content:""}
+.bp-root .bp-tip{margin:6px 0 10px}
+
+/* ── @media print (Sprint 6) ── */
+@media print {
+  /* Ausblenden: Toolbar, Banner, Status, Modals, Edit-Buttons, Anleitung */
+  .bp-toolbar,.bp-banner,.bp-update-banner,.bp-status,.bp-readonly-hint,
+  .bp-capacity,.bp-screen-only,.bp-overlay,.bp-modal,.bp-row-action,
+  .bp-guide,.bp-guide-body,.bp-print-header,.bp-tip{display:none !important}
+  /* Edit-Buttons (bp-row-action) verbergen, NICHT die Datenzellen bp-ec/bp-editable */
+  .bp-row-action{display:none !important}
+
+  /* Print-Only Elemente einblenden */
+  .bp-print-only{display:table-cell !important}
+  .bp-titlebar-row{display:table-row !important}
+
+  /* Seite */
+  @page{size:A4 landscape;margin:1.2cm 1cm}
+  body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+
+  /* Root */
+  .bp-root{font-size:10px;color:#1a1a2e;font-family:Arial,Helvetica,sans-serif}
+
+  /* Tabellen-Layout */
+  .bp-table-wrap{max-height:none;overflow:visible;box-shadow:none}
+  .bp-table{min-width:0;width:100%;border-collapse:collapse;border:none}
+
+  /* Titel-Zeile (Print) */
+  .bp-table thead tr.bp-titlebar-row th{
+    background:rgb(151,19,33) !important;color:#fff !important;
+    padding:10px 14px !important;vertical-align:middle !important;
+    border:none !important;position:static !important;
+    text-transform:none !important;letter-spacing:.01em !important;
+    -webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .bp-titlebar-buttons{display:none !important}
+  .bp-meta-vorlauf{display:none !important}
+  .bp-titlebar-logo-wrap{float:right;margin-left:16px;line-height:0}
+  .bp-titlebar-logo{height:38px;display:block;filter:brightness(0) invert(1)}
+  .bp-titlebar-text{font-size:22px;font-weight:700;letter-spacing:.01em;line-height:1.15}
+  .bp-titlebar-meta{font-size:11px;opacity:.85;margin-left:10px;font-weight:400}
+
+  /* Spalten-Header — Gemischte Schreibung, sanfte Linie */
+  .bp-table thead th{
+    position:static;background:#fafbfc !important;color:#42526e !important;
+    font-size:10.5px;font-weight:600;letter-spacing:0;
+    padding:8px 6px;border:none;border-bottom:1.5px solid #c1c7d0;
+    white-space:nowrap;text-align:left}
+  .bp-table thead th.bp-sticky-col{left:auto;box-shadow:none}
+
+  /* Datenzellen — luftiger, sanfte Trennlinien */
+  .bp-table tbody tr{height:30px;page-break-inside:avoid}
+  .bp-table tbody td{
+    padding:7px 6px;border:none;border-bottom:1px solid #ebecf0;
+    font-size:11px;vertical-align:middle;background:#fff !important}
+
+  /* Zebra dezent */
+  .bp-table tbody tr:nth-child(even) td{background:#fafbfc !important}
+
+  /* Name-Spalte leicht betonen */
+  .bp-table td.bp-sticky-col{font-weight:600;left:auto;box-shadow:none}
+
+  /* Status-Badge kompakt */
+  .bp-badge{
+    font-size:8px;padding:1px 5px;border-radius:8px;
+    -webkit-print-color-adjust:exact;print-color-adjust:exact}
+
+  /* Rückmeldungs-Spalte */
+  td.bp-col-rm{width:90px}
+
+  /* Sticky aufheben */
+  .bp-sticky-col{position:static !important;box-shadow:none !important}
+
+  /* Entlassene ausblenden */
+  .bp-table tbody tr.bp-row-entlassen{display:none !important}
+  .bp-table tbody tr.bp-row-aufnahme_geplant{display:none !important}
+  /* Inline-edit Markierung nur auf Spans entfernen (nicht auf TDs!) */
+  span.bp-ec,span.bp-editable{cursor:default !important;border-bottom:none !important;background:none !important}
+  td.bp-ec,td.bp-editable{cursor:default !important;background:none !important}
+  /* Confluence-Seitenchrome verstecken — nur unsere Macro-Tabelle drucken */
+  /* Confluence chrome ausblenden — ${H} = '#' nach Velocity (ID-Spezifität für Override!) */
+  ${H}header,${H}navigation,${H}breadcrumbs,.ia-fixed-sidebar,
+  h1.pagetitle,${H}title-heading,
+  ${H}likes-and-labels-container,
+  .page-metadata-modification-info,
+  .wiki-content>*:not(.wysiwyg-macro),
+  .wysiwyg-macro-body>*:not(.bp-root){
+    display:none !important}
+  /* Footer: ID-Selektoren via Velocity-Escape */
+  ${H}footer,${H}footer *,
+  ${H}footer-logo,${H}footer-logo *,
+  ${H}poweredby,${H}poweredby *,
+  ${H}comments-section,${H}comments-section *,
+  .footer-body,.footer-body *,
+  li.print-only{
+    display:none !important;
+    visibility:hidden !important}
+  /* Nur bp-root zeigen */
+  body>*{visibility:hidden !important}
+  .bp-root,.bp-root *{visibility:visible !important}
+  .bp-root{position:absolute !important;top:0 !important;left:0 !important;width:100% !important;margin:0 !important;padding:0 !important}
+}
+.bp-ec{cursor:pointer}
+.bp-ec:hover{background:#f0f4ff !important}
+.bp-editable{cursor:pointer;border-bottom:1px dashed #4c9aff;padding-bottom:1px}
+.bp-editable:hover{background:#e8f0ff;border-radius:2px}
+.bp-kt-detail{color:#6b778c;font-size:0.82em}
+.bp-kz-ablauf{color:#6b778c;font-size:0.82em}
+.bp-badge-click{cursor:pointer;user-select:none}
+.bp-badge-click:hover{opacity:.85}
+.bp-inline-input{width:100%;box-sizing:border-box;padding:3px 5px;border:2px solid #4c9aff;border-radius:3px;font-size:13px;font-family:inherit;background:#fff;color:#172b4d}
+.bp-inline-input:focus{outline:none}
+.bp-print-header{display:none}
+.bp-print-only{display:none !important}
+/* Titelzeile (Screen) */
+.bp-table thead tr.bp-titlebar-row th{background:rgb(151,19,33) !important;color:#fff !important;padding:10px 14px !important;vertical-align:middle !important;text-align:left !important;border:none !important;position:static !important;text-transform:none !important;letter-spacing:.01em !important;font-weight:400 !important}
+.bp-titlebar-logo-wrap{float:right;margin-left:16px;line-height:0}
+.bp-titlebar-logo{height:34px;display:block;filter:brightness(0) invert(1)}
+.bp-titlebar-text{font-weight:700;font-size:22px;letter-spacing:.01em;line-height:1.15;margin:0;padding:0}
+.bp-titlebar-meta{font-size:12px;opacity:.85;font-weight:400;margin-left:10px}
+.bp-titlebar-buttons{display:inline-flex;gap:8px;margin-left:20px;vertical-align:middle}
+.bp-tb-btn{background:#f4f5f7;color:#172b4d;border:1px solid #c1c7d0;font-size:12px;font-weight:400;padding:3px 8px;line-height:1.4;border-radius:3px;display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+.bp-tb-btn svg{flex-shrink:0;display:block}
+.bp-tb-btn:hover{background:#e4e5e9}
+.bp-tb-btn:hover{background:#f0e0e2}
+.bp-perma-link{color:#0052cc;word-break:break-all}
+</style>
+
+<div id="bp-banner-${paramGruppenbezeichnung}"><!-- Banner Sprint 5 --></div>
+<div class="bp-status bp-status-visible bp-status-info" id="bp-status-${paramGruppenbezeichnung}">Lade &hellip;</div>
+<div id="bp-print-header-${paramGruppenbezeichnung}" class="bp-print-header"><!-- wird vor Druck befüllt --></div>
+<div class="bp-tip"><div class="confluence-information-macro confluence-information-macro-tip conf-macro output-block" data-hasbody="true" data-macro-name="tip"><span class="aui-icon aui-icon-small aui-iconfont-approve confluence-information-macro-icon"> </span><div class="confluence-information-macro-body"><p>Zum Bearbeiten - <strong>NICHT den bearbeiten Button oben nutzen!</strong> - "Neue Aufnahme" klicken, oder den Stift ganz links in der Klientenzeile (oder wie bei Excel in die Zelle klicken die Du bearbeiten willst)</p></div></div></div>
+<div id="bp-table-${paramGruppenbezeichnung}"><!-- Tabelle --></div>
+<div id="bp-modal-${paramGruppenbezeichnung}" class="bp-modal-mount"><!-- Modals --></div>
+
+</div><!-- /.bp-root -->
+
+<script>
+//<![CDATA[
+/* Pitfall #2: CDATA-Wrap */
+(function () {
+'use strict';
+
+// ╔══════════════════════════════════════════════════════════════════╗
+// ║ VELOCITY-${H}-DISZIPLIN  (Pitfall ${H}1 — der häufigste Bug hier) ║
+// ║ Confluence rendert dieses Template durch Velocity, BEVOR der JS-  ║
+// ║ Code im Browser läuft. Velocity interpretiert '${H}wort' als      ║
+// ║ Makro-Aufruf und '$Dwort' als Variable — AUCH in JS-Strings/CSS.  ║
+// ║                                                                    ║
+// ║ REGELN:                                                            ║
+// ║  • Literales '${H}' in JS-Strings/CSS  →  '$D{H}'  (H ist als     ║
+// ║    '${H}' definiert; Velocity setzt es ein, Resultat ist '${H}'). ║
+// ║    Beispiel: indexOf('$D{H}footer') rendert zu indexOf('${H}foot')║
+// ║  • Literales '$D' in JS-Strings        →  '$DD'  (D ist als '$D').║
+// ║  • CSS-ID-Selektoren (${H}footer, ${H}poweredby) lösen Confluences║
+// ║    eigene Velocity-Makros aus → IMMER '$D{H}' davor.              ║
+// ║  • Der Velocity-Smoke-Test im SELFTEST prüft, dass das gerenderte  ║
+// ║    CSS noch '${H}footer' enthält und keine Footer-HTML injiziert. ║
+// ║  • Selbst DIESER Kommentar musste escaped werden — sonst hätte     ║
+// ║    Velocity hier die Atlassian-Footer-HTML hineingerendert.       ║
+// ╚══════════════════════════════════════════════════════════════════╝
+
+// ── CONFIG ────────────────────────────────────────────────────────────
+// Daten aus HTML-data-Attributen lesen — robuster als Inline-Script-Injektion
+var allRoots = document.querySelectorAll('.bp-root[data-inst-id]');
+var ROOT0    = allRoots[allRoots.length - 1]; // letztes = dieses Macro
+// Fallback falls data-Attribut fehlt: AJS.params.pageId
+var pageId   = (ROOT0 && ROOT0.getAttribute('data-page-id')) ||
+               (window.AJS && AJS.params && AJS.params.pageId) || '';
+var instId   = (ROOT0 && ROOT0.getAttribute('data-inst-id')) || '';
+// ── Bezugstherapeuten-Listen ──────────────────────────────────────────
+// Quelle 1 (NEU, Vorrang): state.config.thVerbal / state.config.thNonverbal
+//   -> gepflegt im Einstellungsdialog (Zahnrad), pro Seite+Instanz gespeichert.
+// Quelle 2 (ALT, Fallback): Macro-Parameter TherapeutenVerbal/-NonVerbal.
+//   -> bleibt unveraendert funktionsfaehig und belegt den Dialog vor.
+// Sobald die Einstellung einmal gespeichert wurde (auch als leere Liste),
+// gewinnt sie gegenueber dem Macro-Parameter. Leere Liste = Freitext-Eingabe.
+var _thV     = (ROOT0 && ROOT0.getAttribute('data-th-verbal'))    || '';
+var _thNV    = (ROOT0 && ROOT0.getAttribute('data-th-nonverbal')) || '';
+// parseThList: akzeptiert Array ODER String (Komma / Semikolon / Zeilenumbruch),
+// trimmt, entfernt Leereintraege und Duplikate (case-insensitiv, erste Schreibweise gewinnt).
+function parseThList(v){
+  var arr = Array.isArray(v) ? v : String(v==null?'':v).split(/[,;\r\n]/);
+  var seen={}, out=[];
+  arr.forEach(function(x){
+    var n=String(x==null?'':x).trim();
+    if(!n) return;
+    var k=n.toLowerCase();
+    if(seen[k]) return;
+    seen[k]=1; out.push(n);
+  });
+  return out;
+}
+var paramThVerbalList = parseThList(_thV);
+var paramThNvList     = parseThList(_thNV);
+function thListFor(cfgKey, paramList){
+  var v = (state && state.config) ? state.config[cfgKey] : undefined;
+  if (Array.isArray(v) || typeof v === 'string') return parseThList(v);
+  return paramList.slice();
+}
+function getThVerbalList(){ return thListFor('thVerbal',    paramThVerbalList); }
+function getThNvList()    { return thListFor('thNonverbal', paramThNvList); }
+// Herkunft (fuer die Hinweistexte im Einstellungsdialog)
+function thSource(cfgKey){
+  var v = (state && state.config) ? state.config[cfgKey] : undefined;
+  return (Array.isArray(v) || typeof v === 'string') ? 'settings' : 'param';
+}
+// ── Permalink auf diese Belegungsliste ────────────────────────────────
+// pageId-basierte URL = echter Permalink: bleibt gueltig, wenn die Seite
+// umbenannt oder in einen anderen Space verschoben wird.
+// Fallback-Kette: pageId -> von Velocity gerenderter Seitenpfad -> aktuelle URL.
+var _pagePath = (ROOT0 && ROOT0.getAttribute('data-page-path')) || '';
+if (_pagePath.charAt(0) === '$') _pagePath = '';   // Velocity nicht aufgeloest
+function getConfluenceBaseUrl(){
+  var m = document.getElementById('confluence-base-url');
+  var b = (m && (m.getAttribute('content') || m.content)) ||
+          (window.AJS && AJS.Meta && AJS.Meta.get && AJS.Meta.get('base-url')) ||
+          (window.AJS && AJS.params && AJS.params.baseUrl) || '';
+  b = String(b || '').replace(/\/+$/, '');
+  if (b) return b;
+  var cp = (window.AJS && AJS.contextPath) ? AJS.contextPath() : '';
+  return window.location.origin + String(cp || '').replace(/\/+$/, '');
+}
+// Kurzlink (Confluence "Teilen"-Link, z.B. /x/44RIAg). Kommt aus der REST-API
+// (_links.tinyui) und ist dieselbe URL, die Confluence im Teilen-Dialog anbietet.
+// Wird beim Init einmal geholt; bis dahin gilt die pageId-URL als Fallback —
+// beide zeigen dauerhaft auf dieselbe Seite.
+var tinyLink = '';
+function fetchTinyLink(){
+  if (!pageId) return Promise.resolve('');
+  return fetch(_actCtx() + '/rest/api/content/' + encodeURIComponent(pageId),
+               {headers:{Accept:'application/json'}})
+    .then(function(r){ if(!r.ok) throw new Error('tinyui '+r.status); return r.json(); })
+    .then(function(j){
+      var l = (j && j._links) || {};
+      if (!l.tinyui) return '';
+      var base = String(l.base || getConfluenceBaseUrl()).replace(/\/+$/, '');
+      tinyLink = base + l.tinyui;
+      console.log('[bp]', instId, 'tinyLink =', tinyLink);
+      return tinyLink;
+    })
+    .catch(function(e){ console.warn('[bp]', instId, 'tinyLink nicht verfuegbar', e); return ''; });
+}
+
+// Lange, stets funktionierende Form (Fallback und Erkennungsmuster).
+function getLongLink(){
+  var base = getConfluenceBaseUrl();
+  if (pageId)         return base + '/pages/viewpage.action?pageId=' + encodeURIComponent(pageId);
+  if (_pagePath)      return base + _pagePath;
+  return String(window.location.href).split('#')[0];
+}
+function getPermaLink(){ return tinyLink || getLongLink(); }
+// Frueher wurde ein Instanz-Anker angehaengt. Er wird nicht mehr erzeugt,
+// aber in gespeicherten Vorlagen noch erkannt und entfernt (siehe dropLinkAnchor).
+function linkAnchor(){ return '#bp-root-' + encodeURIComponent(instId); }
+// Alle bekannten Schreibweisen desselben Ziels — fuer die Dubletten-Erkennung
+// in gespeicherten Vorlagen (Kurzlink UND lange Form).
+function linkVariants(){
+  var out=[];
+  [tinyLink, getLongLink()].forEach(function(u){ if(u) out.push(u); });
+  return out;
+}
+// dropLinkAnchor: entfernt den frueher angehaengten Anker aus einem Text,
+// aber nur direkt hinter einer bekannten Link-Form.
+function dropLinkAnchor(text){
+  if(!text) return text;
+  var a=linkAnchor();
+  if(text.indexOf(a)<0) return text;
+  linkVariants().forEach(function(u){ text=text.split(u+a).join(u); });
+  return text;
+}
+
+var PROP_KEY = 'belegungsplaner_' + pageId + '_' + instId;
+var MAX_CAP       = 10;
+var WARN_CAP      = 9;
+
+var ROOT      = document.getElementById('bp-root-'    + instId) || ROOT0;
+var STATUS_EL = document.getElementById('bp-status-'  + instId);
+var BANNER_EL = document.getElementById('bp-banner-'  + instId);
+var TABLE_EL  = document.getElementById('bp-table-'   + instId);
+var MODAL_EL  = document.getElementById('bp-modal-'   + instId);
+
+if (!ROOT) { console.error('[bp] Root nicht gefunden', instId); return; }
+
+var state        = null;
+var stateVersion = 0;
+var canEdit      = false;
+var showEntlassen = false;   // Wartungs-Umschalter: entlassene Klient:innen einblenden
+var sortKey = 'aufnahme';    // Sortier-Spalte (COLS.key) — Klick auf Header ändert sie
+var sortDir = 'asc';         // 'asc' | 'desc'; Standard: Aufnahmedatum aufsteigend
+
+// ── SPRINT 1: AUTH + STORAGE ──────────────────────────────────────────
+function checkCanEdit() {
+  console.log('[bp]', instId, 'checkCanEdit start');
+  // Confluence Server 7.4: currentuser.edit nicht zuverlässig via REST.
+  // Edit-Button im DOM prüfen — Confluence rendert ihn nur für Nutzer mit Bearbeitungsrecht.
+  canEdit = !!(
+    document.querySelector('#editPageLink')                              ||
+    document.querySelector('.editPageLink')                              ||
+    document.querySelector('.toolbar-item .page-edit-button')            ||
+    document.querySelector('[data-key*="editPageLink"]')                 ||
+    document.querySelector('.aui-nav .edit-button-wrap a')               ||
+    document.querySelector('#action-edit-page')
+  );
+  console.log('[bp]', instId, 'canEdit =', canEdit);
+  return Promise.resolve();
+}
+function loadState() {
+  var dupes = document.querySelectorAll('[id="bp-root-' + instId + '"]');
+  if (dupes.length > 1) setStatus('WARNUNG: Gruppenbezeichnung "' + instId + '" ist auf dieser Seite doppelt vergeben!', true);
+  console.log('[bp]', instId, 'loadState fetch', '/rest/api/content/' + pageId + '/property/' + PROP_KEY);
+  return fetch('/rest/api/content/' + pageId + '/property/' + PROP_KEY,
+    {headers:{Accept:'application/json'}})
+  .then(function(r){
+    console.log('[bp]', instId, 'property response status', r.status);
+    if (r.status === 404) { state = emptyState(); stateVersion = 0; return state; }
+    if (!r.ok) throw new Error('Laden fehlgeschlagen: ' + r.status);
+    return r.json();
+  }).then(function(j){
+    if (j && j.value) { state = j.value; stateVersion = j.version.number; }
+    console.log('[bp]', instId, 'state loaded, clients:', (state.clients||[]).length, 'version:', stateVersion);
+    return state;
+  });
+}
+
+// saveState(ns, opts) — optimistisches Speichern mit granularem Konflikt-Replay.
+//   opts.replay(base): wendet NUR die eigene Änderung auf einen frisch geladenen
+//     (fremden) Stand neu an und gibt den zusammengeführten Stand zurück.
+//     Bei 409 (jemand anderes hat zwischenzeitlich gespeichert) wird so nicht der
+//     komplette Snapshot überschrieben, sondern nur das eigene Delta gemergt —
+//     fremde Änderungen an anderen Klienten/Feldern bleiben erhalten.
+//   Ohne replay: Fallback = letzter-gewinnt (alter Stand wird überschrieben).
+function saveState(ns, opts) {
+  opts = opts || {};
+  var retry  = opts.retry  || 0;
+  var replay = opts.replay;
+  if (!canEdit) return Promise.reject(new Error('Keine Schreibrechte.'));
+  ns.lastModified = new Date().toISOString();
+  var isNew = stateVersion === 0;
+  var body  = {key:PROP_KEY, value:ns, version:{number:stateVersion+1}};
+  return fetch('/rest/api/content/' + pageId + '/property/' + (isNew ? '' : PROP_KEY), {
+    method: isNew ? 'POST' : 'PUT',
+    headers:{'Content-Type':'application/json','X-Atlassian-Token':'no-check'},
+    body: JSON.stringify(body)
+  }).then(function(r){
+    if (r.status === 409 && retry < 2) {
+      // Konflikt: fremden Stand holen OHNE globalen state zu überschreiben
+      // (damit ein etwaiger Rollback im Aufrufer korrekt bleibt), nur das eigene
+      // Delta neu anwenden, dann den Merge speichern.
+      return fetchFresh().then(function(fresh){
+        stateVersion = fresh.version;
+        var merged = replay ? replay(fresh.value) : ns;
+        return saveState(merged, {retry:retry+1, replay:replay, merged:true});
+      });
+    }
+    if (!r.ok) throw new Error('Speichern fehlgeschlagen: ' + r.status);
+    return r.json().then(function(j){
+      stateVersion = j.version.number;
+      state = ns;
+      // Nach erfolgreichem Merge: UI auf den zusammengeführten Stand bringen
+      // (zeigt jetzt auch die fremden Änderungen, nicht nur das eigene Delta).
+      if (opts.merged) { renderTable(state); renderBanner(state); }
+      hideUpdateBanner();
+      scheduleActivityBump();   // fachliche Änderung → (gedrosselt) Stream-Eintrag
+      return state;
+    });
+  });
+}
+
+// fetchFresh(): liest den aktuellen Property-Stand (Wert + Versionsnummer),
+// ohne den globalen state/stateVersion als Seiteneffekt zu verändern.
+function fetchFresh(){
+  return fetch('/rest/api/content/' + pageId + '/property/' + PROP_KEY,
+    {headers:{Accept:'application/json'}})
+  .then(function(r){
+    if (r.status === 404) return {value: emptyState(), version: 0};
+    if (!r.ok) throw new Error('Konflikt-Reload fehlgeschlagen: ' + r.status);
+    return r.json().then(function(j){ return {value:j.value, version:j.version.number}; });
+  });
+}
+
+// ── Replay-Helfer: beschreiben die eigene Änderung als Funktion, die sie auf
+//    einen beliebigen (fremden) Basis-Stand neu anwendet. Idempotent: es werden
+//    konkrete Zielwerte gesetzt, nicht relative Operationen wiederholt. ──
+function replaySetClientFields(clientId, fields, fullClient){
+  return function(base){
+    base.clients = base.clients || [];
+    var i = base.clients.findIndex(function(c){return c.id===clientId;});
+    if (i < 0) { if (fullClient) base.clients.push(JSON.parse(JSON.stringify(fullClient))); }
+    else { Object.assign(base.clients[i], fields); base.clients[i].updatedAt = new Date().toISOString(); }
+    return base;
+  };
+}
+function replayAddClient(client){
+  return function(base){
+    base.clients = base.clients || [];
+    if (!base.clients.some(function(c){return c.id===client.id;}))
+      base.clients.push(JSON.parse(JSON.stringify(client)));
+    return base;
+  };
+}
+function replayRemoveClient(clientId){
+  return function(base){
+    base.clients = (base.clients||[]).filter(function(c){return c.id!==clientId;});
+    return base;
+  };
+}
+function replaySetTop(fieldsObj){
+  return function(base){ Object.assign(base, fieldsObj); return base; };
+}
+
+function emptyState(){
+  return {schemaVersion:1, gruppenbezeichnung:instId, lastModified:new Date().toISOString(), clients:[]};
+}
+
+// ── SPRINT 2: COMPUTE + RENDER ────────────────────────────────────────
+function parseISO(s){ if(!s)return null; var d=new Date(s+'T00:00:00'); return isNaN(d)?null:d; }
+function toISO(d){
+  if(!d)return null;
+  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+}
+function pad(n){ return String(n).padStart(2,'0'); }
+function addDays(d,n){ if(!d)return null; var r=new Date(d); r.setDate(r.getDate()+n); return r; }
+function daysBetween(a,b){ if(!a||!b)return null; return Math.round((b-a)/86400000); }
+function sod(d){ var r=new Date(d); r.setHours(0,0,0,0); return r; }
+// Datums-Plausibilität: nur aktuelles Jahr ±1 zulassen (verhindert Tippfehler
+// wie '0002-07-10', die einen Klienten still in die Vergangenheit/„entlassen" schieben).
+function dateMin(){ return (new Date().getFullYear()-1)+'-01-01'; }
+function dateMax(){ return (new Date().getFullYear()+1)+'-12-31'; }
+function dateInRange(iso){
+  var d=parseISO(iso); if(!d) return false;
+  var y=d.getFullYear(), now=new Date().getFullYear();
+  return y>=now-1 && y<=now+1;
+}
+function dateRangeMsg(){ var y=new Date().getFullYear(); return 'Jahr muss zwischen '+(y-1)+' und '+(y+1)+' liegen'; }
+function dateAttrs(type){ return type==='date' ? ' min="'+dateMin()+'" max="'+dateMax()+'"' : ''; }
+
+// DateUtil: gebündelter Namespace aller Datums-Helfer (ein Ort zum Nachschlagen).
+// Verweist auf die obigen/folgenden Funktionen (alle hoisted). Bestehende direkte
+// Aufrufe (parseISO(...), toISO(...)) funktionieren unverändert weiter.
+var DateUtil = {
+  parseISO:parseISO, toISO:toISO, pad:pad, addDays:addDays,
+  daysBetween:daysBetween, sod:sod, fmtDate:fmtDate, parseFlexDate:parseFlexDate
+};
+
+function vorlEntlass(c){ return parseISO(c.verlaengerung_bis) || parseISO(c.kostenzusage_bis) || null; }
+function ueGruppe(c){
+  if(c.kein_ue_gruppe)return null;
+  var base=parseISO(c.entlassdatum)||vorlEntlass(c);
+  // -6 Kalendertage = volle Woche zurück → jeder Wochentag (Mo–Fr) wird einmal
+  // in der Ü-Gruppe besucht. Basis: Entlass (final) wenn gefüllt, sonst vorl. Entlass.
+  return base?addDays(base,-6):null;
+}
+function behWochen(c, today){
+  // Aktuelle (laufende) Behandlungswoche: Aufnahmetag = Woche 1,
+  // Aufnahme + 7 Tage = Woche 2, usw. Nicht die geplante Gesamtdauer.
+  var a=parseISO(c.aufnahmedatum);
+  if(!a)return null;
+  today = today || sod(new Date());
+  if(a>today) return null;   // Aufnahme noch nicht erfolgt (geplant)
+  return Math.max(1, Math.floor(daysBetween(a,today)/7)+1);
+}
+
+var S = {
+  ENTLASSEN:'entlassen', UE:'in_ue_gruppe', ENT:'entscheidung_faellig',
+  VGEH:'verl_genehmigt', VBEA:'verl_beantragt', VZUB:'verl_zu_beantragen',
+  NEU:'aufnahme_neu', STABIL:'stabil', GEPLANT:'aufnahme_geplant',
+  VABG:'verl_abgelehnt', VWID:'verl_widerspruch', VEK:'verl_eigene_kosten'
+};
+
+function getEntscheidungsGrenze(){
+  return (state&&state.config&&state.config.entscheidungsGrenze)||17;
+}
+
+// Selbstzahler (SZ): keine Krankenkasse im Spiel → die Verlängerungsantrag-Status
+// (VA stellen / VA beantragt / VA bewilligt) entfallen. 'Entscheidung' bleibt (neutral).
+function isSelbstzahler(c){
+  var k=(c.kostenzusage_traeger||'').trim().toUpperCase();
+  return k==='SZ' || k.indexOf('SELBSTZAHLER')>=0;
+}
+function computeStatus(c, today){
+  today = today || sod(new Date());
+  var eD=parseISO(c.entlassdatum), ueD=ueGruppe(c), vE=vorlEntlass(c);
+  var vs=c.verlaengerung_status||'keine';
+  if(eD && eD<today) return {code:S.ENTLASSEN};
+  // Zukünftige Aufnahme: Aufnahmedatum liegt nach dem Stichtag → noch nicht in der Gruppe.
+  var aGepl=parseISO(c.aufnahmedatum);
+  if(aGepl && aGepl>today) return {code:S.GEPLANT};
+  // Ü-Gruppe im 6-Tage-Fenster VOR der (vorl.) Entlassung BIS EINSCHLIESSLICH Entlasstag:
+  // ueD<=heute<=Entlasstag. Bei gesetztem Entlassdatum: eD>=today (Entlasstag selbst zählt
+  // noch als Ü-Gruppe, erst der Folgetag ist entlassen, eD<today oben). Ohne Entlassdatum:
+  // vorl. Entlass darf noch nicht überschritten sein (vE>=today) — sonst Entscheidung überfällig.
+  if(ueD && ueD<=today && (eD ? eD>=today : vE>=today)) return {code:S.UE};
+  if(!eD && vE){
+    // ENT (Entscheidung) nur, solange der VA-Workflow noch NICHT in Bearbeitung/erledigt ist.
+    var vaHandled=(vs==='beantragt'||vs==='genehmigt'||vs==='abgelehnt'||vs==='widerspruch'||vs==='eigene_kosten');
+    var tb=daysBetween(today,vE);
+    if(!vaHandled && tb<getEntscheidungsGrenze())
+      return {code:S.ENT, tageBis:tb, ueberfaellig:tb<0};
+  }
+  // VA-Status nur bei Kostenträger mit Krankenkasse — für Selbstzahler (SZ) entfallen sie.
+  if(!isSelbstzahler(c)){
+    if(vs==='genehmigt') return {code:S.VGEH};
+    if(vs==='eigene_kosten') return {code:S.VEK};
+    if(vs==='widerspruch') return {code:S.VWID};
+    if(vs==='abgelehnt') return {code:S.VABG};
+    if(vs==='beantragt') return {code:S.VBEA};
+    // VA stellen: verlaengerung_bis eingetragen, noch nicht weiter bearbeitet
+    if(c.verlaengerung_bis && (vs==='keine'||vs==='zu_beantragen')) return {code:S.VZUB};
+  }
+  var a=parseISO(c.aufnahmedatum);
+  if(a && daysBetween(a,today)<14) return {code:S.NEU};
+  return {code:S.STABIL};
+}
+
+// STATUS_META: EINZIGE Quelle für Label und Badge-Farben je Status-Code.
+// computeStatus liefert den code; badge() liest die Labels/Farben hier.
+// Die CSS-Klasse bp-row-{code} nutzt denselben code-String.
+// Hinweis: Die Zeilen-SORTIERUNG erfolgt NICHT mehr nach Status (das ließ Zeilen
+// beim Editieren verrutschen), sondern fest nach Aufnahmedatum — siehe sortClients().
+// Das Feld 'prio' wird daher für die Sortierung nicht mehr verwendet.
+var STATUS_META={
+  entscheidung_faellig:{label:'Entscheidung', bg:'#ff8c00',fg:'#fff',prio:0},
+  verl_zu_beantragen:  {label:'VA stellen',   bg:'#ffab00',fg:'#000',prio:1},
+  verl_beantragt:      {label:'VA beantragt', bg:'#0052cc',fg:'#fff',prio:2},
+  aufnahme_neu:        {label:'Neu',          bg:'#abf5d1',fg:'#005c2e',prio:3},
+  aufnahme_geplant:    {label:'Geplant',      bg:'#deebff',fg:'#0747a6',prio:7},
+  stabil:              {label:null,           bg:null,    fg:null, prio:4},
+  verl_genehmigt:      {label:'VA bewilligt', bg:'#36b37e',fg:'#fff',prio:5},
+  verl_abgelehnt:      {label:'VA abgelehnt', bg:'#de350b',fg:'#fff',prio:1},
+  verl_widerspruch:    {label:'Widerspruch',  bg:'#6554c0',fg:'#fff',prio:2},
+  verl_eigene_kosten:  {label:'Eigene Kosten',bg:'#00857a',fg:'#fff',prio:5},
+  in_ue_gruppe:        {label:'In \u00dc-Gruppe',bg:'#e8e8e8',fg:'#555',prio:6},
+  entlassen:           {label:'Entlassen',    bg:'#e0e0e0',fg:'#666',prio:99}
+};
+
+function badge(st){
+  var cfg=STATUS_META[st.code]; if(!cfg||!cfg.label)return '';
+  var txt=cfg.label, bg=cfg.bg;
+  if(st.code===S.ENT && st.tageBis!=null){
+    txt += st.ueberfaellig?' ('+Math.abs(st.tageBis)+' T. \u00fcberf\u00e4llig!)'
+                          :' ('+st.tageBis+' T.)';
+    if(st.ueberfaellig) bg='#d04437';
+  }
+  return '<span class="bp-badge" style="background:'+bg+';color:'+cfg.fg+'">'+h(txt)+'</span>';
+}
+
+var WT=['So','Mo','Di','Mi','Do','Fr','Sa'];
+function fmtDate(iso){
+  if(!iso)return '<span class="bp-na">\u2014</span>';
+  var d=typeof iso==='string'?parseISO(iso):iso;
+  if(!d)return iso;
+  return WT[d.getDay()]+' '+pad(d.getDate())+'.'+pad(d.getMonth()+1)+'.'+String(d.getFullYear()).slice(-2);
+}
+
+function h(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function statusPrio(code){
+  var m=STATUS_META[code];
+  return (m&&m.prio!=null)?m.prio:50;
+}
+
+// Header-Sortierung: Standard ist Aufnahmedatum aufsteigend (stabil — kein Verrutschen
+// beim Editieren, solange nicht nach dem editierten Feld sortiert wird). Klick auf eine
+// Header-Zelle wählt die Spalte; erneuter Klick dreht die Richtung. Entlassene bleiben
+// IMMER am Ende; Tiebreak über Aufnahmedatum + id macht Gleichstände deterministisch.
+function colByKey(k){ for(var i=0;i<COLS.length;i++){ if(COLS[i].key===k) return COLS[i]; } return null; }
+function colSortVal(key, c, today){
+  switch(key){
+    case 'status':       return STATUS_META[computeStatus(c,today).code].prio;
+    case 'name':         return (c.name||'').toLowerCase();
+    case 'aufnahme':     return c.aufnahmedatum||'';
+    case 'kz_traeger':   return (c.kostenzusage_traeger||'').toLowerCase();
+    case 'kz_bis':       return c.kostenzusage_bis||'';
+    case 'beh_wochen':   { var w=behWochen(c,today); return (w==null?-1:w); }
+    case 'verl_bis':     return c.verlaengerung_bis||'';
+    case 'goae':         return c.goae?1:0;
+    case 'bt_verbal':    return (c.bt_verbal||'').toLowerCase();
+    case 'bt_nonverbal': return (c.bt_nonverbal||'').toLowerCase();
+    case 'kein_ue':      return c.kein_ue_gruppe?1:0;
+    case 'vorl_entlass': { var v=vorlEntlass(c); return v?toISO(v):''; }
+    case 'ue_gruppe':    { var u=ueGruppe(c);    return u?toISO(u):''; }
+    case 'entlass':      return c.entlassdatum||'';
+    case 'jupsy':        return c.jupsy?1:0;
+    default:             return c.aufnahmedatum||'';
+  }
+}
+function sortClients(cs,today){
+  today = today || sod(new Date());
+  var dir = (sortDir==='desc') ? -1 : 1;
+  var key = colByKey(sortKey) ? sortKey : 'aufnahme';
+  return cs.slice().sort(function(a,b){
+    var ea=computeStatus(a,today).code===S.ENTLASSEN ? 1 : 0;
+    var eb=computeStatus(b,today).code===S.ENTLASSEN ? 1 : 0;
+    if(ea!==eb) return ea-eb;                          // entlassen immer ans Ende
+    var va=colSortVal(key,a,today), vb=colSortVal(key,b,today);
+    var cmp = (typeof va==='number' && typeof vb==='number') ? (va-vb) : String(va).localeCompare(String(vb));
+    if(cmp!==0) return cmp*dir;
+    var da=(a.aufnahmedatum||''), db=(b.aufnahmedatum||'');   // stabiler Tiebreak
+    if(da!==db) return da.localeCompare(db);
+    return String(a.id||'').localeCompare(String(b.id||''));
+  });
+}
+
+function getActiveCount(cs, today){
+  // Ü-Gruppe-Teilnehmer UND zukünftige (geplante) Aufnahmen zählen NICHT gegen die
+  // Regelkapazität (9 reguläre + n Ü-Gruppe). today optional = Stichtag.
+  today = today || sod(new Date());
+  return cs.filter(function(c){
+    var st=computeStatus(c,today);
+    return st.code!==S.ENTLASSEN && st.code!==S.UE && st.code!==S.GEPLANT;
+  }).length;
+}
+
+function renderTable(st, asOf){
+  if(!st||!st.clients){TABLE_EL.innerHTML='<p style="color:#97a0af">Keine Daten.</p>';return;}
+  var realToday=sod(new Date());
+  var today = asOf ? sod(new Date(asOf+'T00:00:00')) : realToday;   // Stichtag (Druck-Vorschau) oder heute
+  var isPreview = !!asOf && today.getTime()!==realToday.getTime();
+  var sorted=sortClients(st.clients,today);
+  var ac=getActiveCount(st.clients, today);
+  var capTxt=ac>=MAX_CAP?' \u2014 <strong>Gruppe voll</strong>':ac>=WARN_CAP?' \u2014 Regelkapazit\u00e4t erreicht':'';
+  // Wartungs-Umschalter: Anzahl entlassener (ausgeblendeter) Klient:innen
+  var entlassenCount=st.clients.filter(function(c){return computeStatus(c,today).code===S.ENTLASSEN;}).length;
+  // Zukünftige (geplante) Aufnahmen — sichtbar, aber nicht im Kontingent
+  var geplantCount=st.clients.filter(function(c){return computeStatus(c,today).code===S.GEPLANT;}).length;
+  var geplantNote = geplantCount>0 ? ' \u00b7 '+geplantCount+' geplant' : '';
+  if(ROOT) ROOT.classList.toggle('bp-show-entlassen', showEntlassen && entlassenCount>0);
+  var entlassenToggle = entlassenCount>0
+    ? ' \u00b7 '+entlassenCount+' entlassen <span class="bp-entlassen-toggle" data-bp-action="toggle-entlassen">'+(showEntlassen?'ausblenden':'anzeigen')+'</span>'
+    : '';
+  var rows=sorted.map(function(c){
+    var st2=computeStatus(c,today);
+    var vE=vorlEntlass(c), ueD=ueGruppe(c), bW=behWochen(c, today);
+    var editBtn=canEdit?'<button class="bp-row-action" data-bp-action="edit" data-bp-id="'+h(c.id)+'" title="Bearbeiten">&#x270e;</button>':'';
+    var ktCell = h(c.kostenzusage_traeger||'')+(c.kostenzusage_detail?' <span class="bp-kt-detail">('+h(c.kostenzusage_detail)+')</span>':'');
+    var kzAblauf='';
+    var _kzD=parseISO(c.kostenzusage_bis);
+    if(_kzD){ kzAblauf=' <span class="bp-kz-ablauf">('+daysBetween(today,_kzD)+' T)</span>'; }
+    // vorl. Entlass: immer computed, nie inline-editierbar
+    var vECell = vE ? fmtDate(toISO(vE)) : '<span class="bp-na">—</span>';
+    // Status-Badge: VA stellen und VA beantragt sind klickbar
+    var statusCell;
+    if(st2.code===S.VZUB && canEdit){
+      statusCell='<span class="bp-badge bp-badge-click" data-bp-action="set-beantragt" data-bp-id="'+h(c.id)+'" title="Klicken: VA beantragt" style="background:#ffab00;color:#000;cursor:pointer">VA stellen ▶</span>';
+    } else if(st2.code===S.VBEA && canEdit){
+      statusCell='<span class="bp-badge bp-badge-click" data-bp-action="decide-va" data-bp-id="'+h(c.id)+'" title="Klicken: Entscheidung (bewilligt oder abgelehnt)" style="background:#0052cc;color:#fff;cursor:pointer">VA beantragt ▶</span>';
+    } else if(st2.code===S.VABG && canEdit){
+      statusCell='<span class="bp-badge bp-badge-click" data-bp-action="decide-abgelehnt" data-bp-id="'+h(c.id)+'" title="Klicken: weiteres Vorgehen nach Ablehnung" style="background:#de350b;color:#fff;cursor:pointer">VA abgelehnt ▶</span>';
+    } else if(st2.code===S.VWID && canEdit){
+      statusCell='<span class="bp-badge bp-badge-click" data-bp-action="decide-va" data-bp-id="'+h(c.id)+'" title="Klicken: Entscheidung über Widerspruch" style="background:#6554c0;color:#fff;cursor:pointer">Widerspruch ▶</span>';
+    } else {
+      statusCell=badge(st2);
+    }
+    // BT-Felder: select wenn Liste konfiguriert (Einstellungen > Macro-Param),
+    // sonst inline-text. Listen werden pro Zeile frisch gelesen -> nach dem
+    // Speichern der Einstellungen sofort wirksam.
+    var _thVL = getThVerbalList(), _thNVL = getThNvList();
+    var btVCell = canEdit
+      ? (_thVL.length
+          ? '<span class="bp-editable" data-bp-action="inline-select" data-bp-id="'+h(c.id)+'" data-bp-field="bt_verbal" data-bp-opts="'+h(_thVL.join('|'))+'">'+h(c.bt_verbal||'—')+'</span>'
+          : '<span class="bp-ec" data-bp-action="inline-edit" data-bp-id="'+h(c.id)+'" data-bp-field="bt_verbal" data-bp-type="text">'+h(c.bt_verbal||'—')+'</span>')
+      : h(c.bt_verbal||'');
+    var btNvCell = canEdit
+      ? (_thNVL.length
+          ? '<span class="bp-editable" data-bp-action="inline-select" data-bp-id="'+h(c.id)+'" data-bp-field="bt_nonverbal" data-bp-opts="'+h(_thNVL.join('|'))+'">'+h(c.bt_nonverbal||'—')+'</span>'
+          : '<span class="bp-ec" data-bp-action="inline-edit" data-bp-id="'+h(c.id)+'" data-bp-field="bt_nonverbal" data-bp-type="text">'+h(c.bt_nonverbal||'—')+'</span>')
+      : h(c.bt_nonverbal||'');
+    var ctx={st2:st2,vE:vE,ueD:ueD,bW:bW,editBtn:editBtn,ktCell:ktCell,kzAblauf:kzAblauf,
+             vECell:vECell,statusCell:statusCell,btVCell:btVCell,btNvCell:btNvCell};
+    var cells=COLS.map(function(col){return col.td(c,ctx);}).join('');
+    return '<tr class="bp-row bp-row-'+st2.code+'" data-bp-row-id="'+h(c.id)+'">'+
+      cells+'<td class="bp-print-only bp-col-rm"></td></tr>';
+  }).join('');
+  var tbBtns = canEdit
+    ? '<span class="bp-titlebar-buttons">'+
+      '<button class="bp-btn bp-tb-btn" data-bp-action="add"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>Neue Aufnahme</button>'+
+      '<button class="bp-btn bp-tb-btn" data-bp-action="reload" title="Aktualisieren"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 7V3.5L11.5 6A5.5 5.5 0 0 0 2.5 8"/><path d="M2 9v3.5L4.5 10A5.5 5.5 0 0 0 13.5 8"/></svg></button>'+
+      '<button class="bp-btn bp-tb-btn" data-bp-action="print"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M4 5V2h8v3"/><rect x="2" y="5" width="12" height="7" rx="1"/><rect x="4" y="9" width="8" height="5"/><circle cx="12" cy="7.5" r="0.5" fill="currentColor" stroke="none"/></svg>Drucken</button>'+
+      '<button class="bp-btn bp-tb-btn" data-bp-action="versand"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="2" y="3.5" width="12" height="9" rx="1"/><path d="M2.5 4.5l5.5 4 5.5-4"/></svg>Versand</button>'+
+      '<button class="bp-btn bp-tb-btn" data-bp-action="settings" title="Einstellungen"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><circle cx="8" cy="8" r="2"/><path d="M13 8c0 .4 0 .8-.1 1.2l1.5 1.1-1.4 2.4-1.7-.6c-.6.5-1.3.9-2 1.1L9 15H6.9l-.3-1.8a5 5 0 0 1-2-1.1l-1.7.6L1.4 10.3 3 9.2A6 6 0 0 1 3 6.8L1.4 5.7l1.4-2.4 1.7.6c.6-.5 1.3-.9 2-1.1L6.9 1H9l.3 1.8c.7.2 1.4.6 2 1.1l1.7-.6 1.4 2.4L13 6.8c0 .4.1.8.1 1.2z"/></svg></button>'+
+      '</span>'
+    : '';
+  var titleRow=
+    '<tr class="bp-titlebar-row">'+
+    '<th colspan="'+(COLS.length+1)+'" class="bp-titlebar-cell">'+
+    '<div class="bp-titlebar-logo-wrap">'+
+    '<img class="bp-titlebar-logo" src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwcHgiIGhlaWdodD0iMTA2cHgiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayIgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgeG1sbnM6c2VyaWY9Imh0dHA6Ly93d3cuc2VyaWYuY29tLyIgc3R5bGU9ImZpbGwtcnVsZTpldmVub2RkO2NsaXAtcnVsZTpldmVub2RkO3N0cm9rZS1saW5lam9pbjpyb3VuZDtzdHJva2UtbWl0ZXJsaW1pdDoyOyI+PGcgdHJhbnNmb3JtPSJtYXRyaXgoMS4zOTAwNzgsMCwwLDEuMzkwMDc4LC01Ni45OTMxOTcsLTI2LjM0MjgwNykiPjxwYXRoIGQ9Ik02NS4wMiw5My4zOUw2Ni4zMiw5My4zOUw2Ni4zNSw5MEw2Ni4zNyw5MEw2OS4xNSw5My41M0w3MC4yMSw5Mi43OEw2Ny43Myw4OS43Nkw3MC4yNCw4Ni45OUw2OS4yOCw4Ni4yMkw2Ni40MSw4OS42NEw2Ni4zNiw4OS42NEw2Ni4zOCw4Ni4zNkw2NS4wOCw4Ni4zNkw2NS4wMiw5My4zOVpNNzIuMzEsOTMuMzlMNzYuMzYsOTMuMzlMNzYuMzYsOTIuMjdMNzMuNjEsOTIuMjdMNzMuNjcsODYuMzZMNzIuMzcsODYuMzZMNzIuMzEsOTMuMzlaTTc4LjI5LDkzLjM5TDc5LjU5LDkzLjM5TDc5LjY1LDg2LjM2TDc4LjM1LDg2LjM2TDc4LjI5LDkzLjM5Wk04Mi4xNyw5My4zOUw4My40Nyw5My4zOUw4My4zNyw4OC4yTDgzLjM5LDg4LjE4TDg2LjU5LDkzLjUzTDg3LjksOTMuMTZMODcuOTYsODYuMzZMODYuNjYsODYuMzZMODYuNzQsOTEuNkw4Ni43Miw5MS42TDgzLjQ0LDg2LjIyTDgyLjIzLDg2LjU4TDgyLjE3LDkzLjM5Wk05MC40OCw5My4zOUw5MS43OCw5My4zOUw5MS44NCw4Ni4zNkw5MC41NCw4Ni4zNkw5MC40OCw5My4zOVpNOTQuMzcsOTMuMzlMOTUuNjcsOTMuMzlMOTUuNyw5MEw5NS43Miw5MEw5OC41LDkzLjUzTDk5LjU2LDkyLjc4TDk3LjA4LDg5Ljc2TDk5LjU5LDg2Ljk5TDk4LjYzLDg2LjIyTDk1Ljc2LDg5LjY0TDk1LjcsODkuNjRMOTUuNzIsODYuMzZMOTQuNDIsODYuMzZMOTQuMzcsOTMuMzlaIiBzdHlsZT0iZmlsbDpyZ2IoMTUxLDE5LDMzKTtmaWxsLXJ1bGU6bm9uemVybzsiLz48cGF0aCBkPSJNMTI1LjgyLDYwLjk4QzEyNi45Myw2MS4wOCAxMjcuOTEsNjAuMjUgMTI4LjAxLDU5LjE0QzEyOC4xMSw1OC4wMyAxMjcuMjgsNTcuMDUgMTI2LjE3LDU2Ljk1QzEyNS4wNiw1Ni44NSAxMjQuMDgsNTcuNjggMTIzLjk4LDU4Ljc5QzEyMy44OSw1OS45IDEyNC43MSw2MC44OCAxMjUuODIsNjAuOThaIiBzdHlsZT0iZmlsbDpyZ2IoMTUxLDE5LDMzKTtmaWxsLXJ1bGU6bm9uemVybzsiLz48cGF0aCBkPSJNMTI4LjI4LDQ2LjM3QzEzMC43Miw0Ni41OCAxMzIuODYsNDQuNzggMTMzLjA3LDQyLjM0QzEzMy4yOCwzOS45IDEzMS40OCwzNy43NiAxMjkuMDQsMzcuNTVDMTI2LjYsMzcuMzQgMTI0LjQ2LDM5LjE0IDEyNC4yNSw0MS41OEMxMjQuMDQsNDQuMDIgMTI1Ljg0LDQ2LjE2IDEyOC4yOCw0Ni4zN1oiIHN0eWxlPSJmaWxsOnJnYigxNTEsMTksMzMpO2ZpbGwtcnVsZTpub256ZXJvOyIvPjxwYXRoIGQ9Ik0xNjcuMTQsNzguMDlDMTY5LjU3LDc4LjMgMTcxLjcyLDc2LjUgMTcxLjkzLDc0LjA2QzE3Mi4xNCw3MS42MiAxNzAuMzQsNjkuNDggMTY3LjksNjkuMjdDMTY1LjQ3LDY5LjA2IDE2My4zMiw3MC44NiAxNjMuMTEsNzMuM0MxNjIuOSw3NS43MyAxNjQuNyw3Ny44OCAxNjcuMTQsNzguMDlaIiBzdHlsZT0iZmlsbDpyZ2IoMTUxLDE5LDMzKTtmaWxsLXJ1bGU6bm9uemVybzsiLz48cGF0aCBkPSJNMTQ0LjMzLDMyLjk4QzE0Ny41MiwzMy4yNiAxNTAuMzQsMzAuODkgMTUwLjYxLDI3LjY5QzE1MC44OCwyNC41IDE0OC41MiwyMS42OCAxNDUuMzIsMjEuNDFDMTQyLjEzLDIxLjEzIDEzOS4zMSwyMy41IDEzOS4wNCwyNi43QzEzOC43NywyOS44OSAxNDEuMTQsMzIuNyAxNDQuMzMsMzIuOThaIiBzdHlsZT0iZmlsbDpyZ2IoMTUxLDE5LDMzKTtmaWxsLXJ1bGU6bm9uemVybzsiLz48cGF0aCBkPSJNMTc4LjI2LDYxLjY2QzE4MS40Niw2MS45NCAxODQuMjcsNTkuNTcgMTg0LjU0LDU2LjM3QzE4NC44MSw1My4xOCAxODIuNDUsNTAuMzYgMTc5LjI1LDUwLjA5QzE3Ni4wNSw0OS44MSAxNzMuMjQsNTIuMTggMTcyLjk3LDU1LjM4QzE3Mi43LDU4LjU3IDE3NS4wNyw2MS4zOSAxNzguMjYsNjEuNjZaIiBzdHlsZT0iZmlsbDpyZ2IoMTUxLDE5LDMzKTtmaWxsLXJ1bGU6bm9uemVybzsiLz48cGF0aCBkPSJNMTY5LjE5LDQxLjI5QzE3My40LDQxLjY1IDE3Ny4xMiwzOC41MyAxNzcuNDgsMzQuMzJDMTc3Ljg0LDMwLjExIDE3NC43MiwyNi40IDE3MC41MSwyNi4wM0MxNjYuMywyNS42NyAxNjIuNTksMjguNzkgMTYyLjIyLDMzQzE2MS44NSwzNy4yMiAxNjQuOTcsNDAuOTMgMTY5LjE5LDQxLjI5WiIgc3R5bGU9ImZpbGw6cmdiKDE1MSwxOSwzMyk7ZmlsbC1ydWxlOm5vbnplcm87Ii8+PHBhdGggZD0iTTQxLDgxLjQ1QzQyLjU5LDgyLjQgNDQuNDMsODIuOTIgNDYuMjksODIuOTJDNDkuMjksODIuOTIgNTIuMSw4MS4zIDUyLjEsNzhDNTIuMSw3Mi40IDQ0LjczLDc0LjI0IDQ0LjczLDcxLjNDNDQuNzMsNzAuMDUgNDYuMDUsNjkuNDYgNDcuMTIsNjkuNDZDNDguMjUsNjkuNDYgNDkuNjMsNzAuMDEgNTAuNTIsNzAuNjhMNTIuMTEsNjguMzJDNTAuNzMsNjcuMTYgNDguNjUsNjYuNjQgNDYuODgsNjYuNjRDNDMuODgsNjYuNjQgNDEuMTksNjguMjMgNDEuMTksNzEuNDFDNDEuMTksNzcuNTkgNDguMzgsNzUuMiA0OC4zOCw3OC4yOUM0OC4zOCw3OS41NCA0Ny4zNyw4MC4wOSA0Ni4yNCw4MC4wOUM0NC44Myw4MC4wOSA0My41OCw3OS41MSA0Mi4zOSw3OC44MUw0MSw4MS40NVpNNTMuOTcsODkuODlMNTQuNjcsODkuODlDNTguNjUsODkuODkgNjAuMjEsODcuOTkgNjEuNjQsODQuNDFMNjguMzEsNjcuNzFMNjQuNzYsNjYuNjRMNjAuNzUsNzcuODRMNjAuNyw3Ny44NEw1Ny4zNyw2Ni42NEw1My42NCw2Ny43MUw1OC44NCw4Mi40OEw1Ny43NCw4NC44NEM1Ni43OSw4Ni44MyA1NS4xMSw4Ni44OSA1NC41Myw4Ni44OUw1My45OCw4Ni44OUw1My45OCw4OS44OUw1My45Nyw4OS44OVpNNjkuODQsODEuNDVDNzEuNDMsODIuNCA3My4yNyw4Mi45MiA3NS4xMyw4Mi45MkM3OC4xMyw4Mi45MiA4MC45NCw4MS4zIDgwLjk0LDc4QzgwLjk0LDcyLjQgNzMuNTcsNzQuMjQgNzMuNTcsNzEuM0M3My41Nyw3MC4wNSA3NC44OSw2OS40NiA3NS45Niw2OS40NkM3Ny4wOSw2OS40NiA3OC40Nyw3MC4wMSA3OS4zNiw3MC42OEw4MC45NSw2OC4zMkM3OS41Nyw2Ny4xNiA3Ny40OSw2Ni42NCA3NS43Miw2Ni42NEM3Mi43Miw2Ni42NCA3MC4wMyw2OC4yMyA3MC4wMyw3MS40MUM3MC4wMyw3Ny41OSA3Ny4yMiw3NS4yIDc3LjIyLDc4LjI5Qzc3LjIyLDc5LjU0IDc2LjIxLDgwLjA5IDc1LjA4LDgwLjA5QzczLjY3LDgwLjA5IDcyLjQyLDc5LjUxIDcxLjIzLDc4LjgxTDY5Ljg0LDgxLjQ1Wk04NS45OSw4Mi40OUw4OC41Niw4Mi40OUw5Mi42LDYzLjM0TDk4LjkzLDYzLjM0TDk5LjM2LDYxLjMyTDgzLjY3LDYxLjMyTDgzLjI0LDYzLjM0TDkwLjAzLDYzLjM0TDg1Ljk5LDgyLjQ5Wk05OS4zLDczLjE5QzEwMC4xMyw3MS4wOCAxMDEuNzgsNjguNDggMTA0LjE5LDY4LjQ4QzEwNi40OCw2OC40OCAxMDcuMDMsNzAuMTkgMTA3LjAzLDcyLjAzQzEwNy4wMyw3Mi40MyAxMDcsNzIuODMgMTA2Ljk3LDczLjE5TDk5LjMsNzMuMTlaTTEwOS4wOSw3NC44NUMxMDkuMTUsNzQuMTIgMTA5LjI0LDczLjM4IDEwOS4yNCw3Mi42NUMxMDkuMjQsNjkuNTkgMTA3Ljk5LDY2Ljg0IDEwNC41LDY2Ljg0Qzk5LjY3LDY2Ljg0IDk2LjMsNzIuMDQgOTYuMyw3Ni40MUM5Ni4zLDgwLjIzIDk4LjI5LDgyLjkzIDEwMi4yMyw4Mi45M0MxMDQuNCw4Mi45MyAxMDYuNDIsODEuODMgMTA3Ljk1LDgwLjdMMTA3LjA5LDc5LjIzQzEwNS44Nyw4MC4yNyAxMDQuMjEsODEuMSAxMDIuNSw4MS4xQzk5LjcyLDgxLjEgOTguNzQsNzguODQgOTguNzQsNzYuNkM5OC43NCw3Ni4wMiA5OC44LDc1LjUgOTguOTIsNzQuODZMMTA5LjA5LDc0Ljg2TDEwOS4wOSw3NC44NVpNMTExLjYsODIuNDlMMTE0LjA1LDgyLjQ5TDExOC44NSw1OS43OUwxMTYuNCw1OS43OUwxMTEuNiw4Mi40OVpNMTIwLjEsODIuNDlMMTIyLjU1LDgyLjQ5TDEyNS43Niw2Ny4yNkwxMjMuMzEsNjcuMjZMMTIwLjEsODIuNDlaTTEzMS4wNSw3Ni41OUMxMzEuMDUsNzMuMTkgMTMyLjk1LDY4LjY3IDEzNi44Myw2OC42N0MxMzkuNjEsNjguNjcgMTQwLjU5LDcwLjkzIDE0MC41OSw3My4xN0MxNDAuNTksNzYuNTcgMTM4LjY5LDgxLjA5IDEzNC44MSw4MS4wOUMxMzIuMDMsODEuMDkgMTMxLjA1LDc4LjgyIDEzMS4wNSw3Ni41OVpNMTI4LjYsNzYuNDdDMTI4LjYsODAuMTcgMTMwLjc3LDgyLjkyIDEzNC42OSw4Mi45MkMxMzkuODksODIuOTIgMTQzLjA0LDc4LjIxIDE0My4wNCw3My4yOEMxNDMuMDQsNjkuNTggMTQwLjg3LDY2LjgzIDEzNi45NSw2Ni44M0MxMzEuNzUsNjYuODMgMTI4LjYsNzEuNTQgMTI4LjYsNzYuNDdaTTE0NC4zNSw4Mi4xM0MxNDUuNTEsODIuNzEgMTQ2Ljg2LDgyLjkzIDE0OC40NSw4Mi45M0MxNTEuNiw4Mi45MyAxNTQuNDEsODEuMzcgMTU0LjQxLDc4LjMxQzE1NC40MSw3NC4wMyAxNDguNzgsNzQuMyAxNDguNzgsNzEuNDZDMTQ4Ljc4LDY5Ljg3IDE0OS44OCw2OC42OCAxNTIuNiw2OC42OEMxNTMuNDMsNjguNjggMTU0LjUsNjguODYgMTU1LjU0LDY5LjE3TDE1Ni4xOCw2Ny40NkMxNTUuMDIsNjcuMDYgMTUzLjg2LDY2Ljg1IDE1Mi41NCw2Ni44NUMxNDguNTksNjYuODUgMTQ2LjMzLDY4Ljg0IDE0Ni4zMyw3MS41OUMxNDYuMzMsNzUuOTMgMTUxLjk2LDc1LjUxIDE1MS45Niw3OC40N0MxNTEuOTYsODAuNjEgMTQ5Ljk0LDgxLjI4IDE0OC4yMyw4MS4yOEMxNDcuMSw4MS4yOCAxNDYuMDYsODEuMDcgMTQ1LjA1LDgwLjU4TDE0NC4zNSw4Mi4xM1oiIHN0eWxlPSJmaWxsOnJnYigxMTIsMTExLDExMSk7ZmlsbC1ydWxlOm5vbnplcm87Ii8+PC9nPjwvc3ZnPg==" alt="sysTelios Klinik">'+
+    '</div>'+
+    '<span class="bp-titlebar-text">Belegungsplaner — '+h(instId)+'</span>'+
+    '<span class="bp-titlebar-meta"> · '+ac+' aktive Klient(en)<span class="bp-screen-only">'+capTxt+'</span> · Stand: '+today.toLocaleDateString('de-DE')+(isPreview?' (Planungsstand)':'')+'<span class="bp-meta-vorlauf"> · '+getEntscheidungsGrenze()+' Tage Vorlauf</span><span class="bp-screen-only">'+geplantNote+entlassenToggle+'</span></span>'+
+    tbBtns+
+    '</th></tr>';
+
+  TABLE_EL.innerHTML=
+    '<div class="bp-table-wrap">'+
+    '<table class="bp-table"><thead>'+titleRow+'<tr>'+
+    COLS.map(function(col){
+      var active = col.key===sortKey;
+      var arrow = active ? (sortDir==='asc'?' \u25b2':' \u25bc') : '';
+      var cls = 'bp-col-'+col.idx+(col.thCls?' '+col.thCls:'')+' bp-sortable'+(active?' bp-sorted':'');
+      return '<th class="'+cls+'" data-bp-action="sort" data-bp-sortkey="'+col.key+'" title="Nach \u201e'+h(col.th)+'\u201c sortieren">'+col.th+arrow+'</th>';
+    }).join('')+
+    '<th class="bp-print-only bp-col-rm">R\u00fcckmeldung</th>'+
+    '</tr></thead><tbody>'+rows+'</tbody></table></div>';
+  disableScrollbar();
+}
+
+function disableScrollbar(){
+  if(!window.AJS)return;
+  window.AJS.toInit(function(){
+    var $=window.AJS.$||window.jQuery; if(!$)return;
+    $(TABLE_EL).find('.bp-table-wrap').closest('.table-wrap').removeClass('table-wrap');
+  });
+}
+
+// ── SPRINT 3: AUFNAHME-MODAL ──────────────────────────────────────────
+function thField(id, list, val){
+  if(list&&list.length){
+    // Bestehende Zuordnung darf nicht verloren gehen, wenn der Name (mehr)
+    // nicht in der konfigurierten Liste steht (z.B. nach Aenderung in den
+    // Einstellungen oder Umstieg Macro-Parameter -> Settings).
+    var all=list.slice();
+    if(val && all.indexOf(val)<0) all.push(val);
+    var opts=['<option value="">\u2014 bitte w\u00e4hlen \u2014</option>'].concat(
+      all.map(function(n){return '<option value="'+h(n)+'"'+(n===val?' selected':'')+'>'+h(n)+'</option>';}));
+    return '<select id="'+id+'" class="bp-input">'+opts.join('')+'</select>';
+  }
+  return '<input type="text" id="'+id+'" class="bp-input" value="'+h(val||'')+'" placeholder="Name eingeben">';
+}
+
+function openAufnahmeModal(){
+  var ac=getActiveCount(state.clients);
+  var blocked=ac>=MAX_CAP;
+  var warn=!blocked&&ac===WARN_CAP-1;
+  var capMsg=blocked
+    ?'<div class="bp-alert bp-alert-error">Maximale Gruppenkapazit\u00e4t erreicht ('+ac+'/'+MAX_CAP+'). Keine weitere Aufnahme m\u00f6glich.</div>'
+    :warn?'<div class="bp-alert bp-alert-warn">Hinweis: Diese Aufnahme bringt die Gruppe auf '+WARN_CAP+' Klienten (Regelkapazit\u00e4t).</div>':'';
+  MODAL_EL.innerHTML=
+    '<div class="bp-overlay" data-bp-action="close-modal">'+
+    '<div class="bp-modal" role="dialog" aria-modal="true">'+
+    '<div class="bp-modal-header"><span class="bp-modal-title">Neue Aufnahme</span>'+
+    '<button class="bp-modal-close" data-bp-action="close-modal">&times;</button></div>'+
+    '<div class="bp-modal-body">'+capMsg+
+    field('bp-a-name','Name','text','',true)+
+    '<div class="bp-field"><label for="bp-a-aufnahme">Aufnahmedatum <span class="bp-req">*</span></label>'+
+    '<input type="date" id="bp-a-aufnahme" class="bp-input" value="'+toISO(new Date())+'"'+dateAttrs('date')+' required></div>'+
+    field('bp-a-kz-traeger','Kostentr\u00e4ger','text','PKV, BH, beides oder SZ',true)+
+    field('bp-a-kz-bis','Kostenzusage bis','date','')+
+    field('bp-a-kz-detail','Detail','text','z.B. PKV 6W / Beih. 4W')+
+    '<div class="bp-field"><label>Wahlleistung</label>'+
+    '<label class="bp-checkbox-label"><input type="checkbox" id="bp-a-goae"> Wahlleistung</label></div>'+
+    '<div class="bp-field"><label>JuPsy</label>'+
+    '<label class="bp-checkbox-label"><input type="checkbox" id="bp-a-jupsy"> JuPsy</label></div>'+
+    '<div class="bp-field"><label for="bp-a-btv">Bezugsth. Verbal</label>'+thField('bp-a-btv',getThVerbalList(),'')+'</div>'+
+    '<div class="bp-field"><label for="bp-a-btnv">Bezugsth. Non-Verbal</label>'+thField('bp-a-btnv',getThNvList(),'')+'</div>'+
+    '</div>'+
+    '<div class="bp-modal-footer">'+
+    '<button class="bp-btn bp-btn-primary" data-bp-action="save-aufnahme"'+(blocked?' disabled':'')+'>Aufnehmen</button>'+
+    '<button class="bp-btn" data-bp-action="close-modal">Abbrechen</button>'+
+    '</div></div></div>';
+  bindEsc();
+  var el=document.getElementById('bp-a-name'); if(el)el.focus();
+}
+
+function field(id,lbl,type,ph,req){
+  return '<div class="bp-field"><label for="'+id+'">'+lbl+(req?' <span class="bp-req">*</span>':'')+'</label>'+
+    '<input type="'+type+'" id="'+id+'" class="bp-input" placeholder="'+h(ph||'')+'"'+dateAttrs(type)+(req?' required':'')+'>'+
+    '</div>';
+}
+
+function handleAufnahme(){
+  var name=val('bp-a-name'), auf=val('bp-a-aufnahme'), kzt=val('bp-a-kz-traeger');
+  var kzb=val('bp-a-kz-bis'), kzd=val('bp-a-kz-detail');
+  var goae=document.getElementById('bp-a-goae').checked;
+  var jupsy=document.getElementById('bp-a-jupsy').checked;
+  var btv=val('bp-a-btv'), btnv=val('bp-a-btnv');
+  var err={};
+  if(!name||name.length<2) err['bp-a-name']='Name erforderlich (min. 2 Zeichen)';
+  if(!auf) err['bp-a-aufnahme']='Aufnahmedatum erforderlich';
+  if(!kzt) err['bp-a-kz-traeger']='Kostentr\u00e4ger erforderlich';
+  if(auf&&!dateInRange(auf)) err['bp-a-aufnahme']=dateRangeMsg();
+  if(kzb&&!dateInRange(kzb)) err['bp-a-kz-bis']=dateRangeMsg();
+  if(kzb&&auf&&kzb<auf) err['bp-a-kz-bis']='Kostenzusage-Datum muss nach Aufnahme liegen';
+  if(Object.keys(err).length){showErr(err);return;}
+  var _isFuture=(function(){var a=parseISO(auf); return a && a>sod(new Date());})();
+  if(!_isFuture && getActiveCount(state.clients)>=MAX_CAP){setStatus('Maximale Kapazit\u00e4t erreicht.',true);return;}
+  var nc={
+    id:'c_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,6),
+    name:name, aufnahmedatum:auf, kostenzusage_traeger:kzt,
+    kostenzusage_bis:kzb||null, kostenzusage_detail:kzd,
+    verlaengerung_bis:null, verlaengerung_status:'keine',
+    goae:goae, jupsy:jupsy, bt_verbal:btv, bt_nonverbal:btnv,
+    kein_ue_gruppe:false, entlassdatum:null,
+    createdAt:new Date().toISOString()
+  };
+  state.clients.push(nc);
+  renderTable(state); renderBanner(state); closeModal();
+  saveState(state, {replay:replayAddClient(nc)}).then(function(){setStatus(name+' aufgenommen.');}).catch(function(e){
+    state.clients.pop(); renderTable(state); renderBanner(state);
+    setStatus('Fehler: '+e.message,true); openAufnahmeModal();
+  });
+}
+
+// ── SPRINT 4: EDIT-MODAL ──────────────────────────────────────────────
+function openEditModal(clientId){
+  var c=state.clients.find(function(x){return x.id===clientId;}); if(!c)return;
+  var vs=c.verlaengerung_status||'keine';
+  var vsOpts=['keine|Keine Verl\u00e4ngerung','zu_beantragen|Zu beantragen','beantragt|Beantragt','genehmigt|Genehmigt','abgelehnt|Abgelehnt','widerspruch|Widerspruch','eigene_kosten|Eigene Kosten']
+    .map(function(o){var p=o.split('|');return '<option value="'+p[0]+'"'+(p[0]===vs?' selected':'')+'>'+p[1]+'</option>';}).join('');
+  MODAL_EL.innerHTML=
+    '<div class="bp-overlay" data-bp-action="close-modal">'+
+    '<div class="bp-modal bp-modal-wide" role="dialog" aria-modal="true">'+
+    '<div class="bp-modal-header"><span class="bp-modal-title">&#x270e; '+h(c.name)+'</span>'+
+    '<button class="bp-modal-close" data-bp-action="close-modal">&times;</button></div>'+
+    '<div class="bp-modal-body">'+
+
+    '<fieldset class="bp-section"><legend>Stammdaten</legend>'+
+    fedit('bp-e-name','Name','text',c.name,true)+
+    fedit('bp-e-auf','Aufnahmedatum','date',c.aufnahmedatum,true)+
+    fedit('bp-e-kzt','Kostentr\u00e4ger','text',c.kostenzusage_traeger)+
+    fedit('bp-e-kzb','Kostenzusage bis','date',c.kostenzusage_bis)+
+    fedit('bp-e-kzd','Detail','text',c.kostenzusage_detail)+
+    '<div class="bp-field"><label>Wahlleistung</label>'+
+    '<label class="bp-checkbox-label"><input type="checkbox" id="bp-e-goae"'+(c.goae?' checked':'')+'>Wahlleistung</label></div>'+
+    '<div class="bp-field"><label>JuPsy</label>'+
+    '<label class="bp-checkbox-label"><input type="checkbox" id="bp-e-jupsy"'+(c.jupsy?' checked':'')+'>JuPsy</label></div>'+
+    '<div class="bp-field"><label for="bp-e-btv">Bezugsth. Verbal</label>'+thField('bp-e-btv',getThVerbalList(),c.bt_verbal)+'</div>'+
+    '<div class="bp-field"><label for="bp-e-btnv">Bezugsth. Non-Verbal</label>'+thField('bp-e-btnv',getThNvList(),c.bt_nonverbal)+'</div>'+
+    '</fieldset>'+
+
+    '<fieldset class="bp-section"><legend>Verl\u00e4ngerung</legend>'+
+    '<div class="bp-hint-workflow">Verlängerungs-Workflow: zu beantragen &rarr; beantragt &rarr; genehmigt<br>'+
+    '(= noch nicht abgeschickt &rarr; beim Kostentr\u00e4ger &rarr; zugesagt)</div>'+
+    '<div class="bp-field"><label for="bp-e-vs">Status</label>'+
+    '<select id="bp-e-vs" class="bp-input">'+vsOpts+'</select></div>'+
+    '<div class="bp-field" id="bp-e-vdwrap"'+(vs==='keine'?' style="display:none"':'')+'>'+
+    '<label for="bp-e-vb">Verl\u00e4ngerung bis <span class="bp-req">*</span></label>'+
+    '<input type="date" id="bp-e-vb" class="bp-input" value="'+h(c.verlaengerung_bis||'')+'"'+dateAttrs('date')+'></div>'+
+    '</fieldset>'+
+
+    '<fieldset class="bp-section"><legend>\u00dc-Gruppe &amp; Entlassung</legend>'+
+    '<div class="bp-field bp-checkbox">'+
+    '<label class="bp-checkbox-label"><input type="checkbox" id="bp-e-kue"'+(c.kein_ue_gruppe?' checked':'')+'>'+
+    ' Klient nimmt NICHT an der \u00dc-Gruppe teil</label>'+
+    '<div class="bp-hint">Standard ist Teilnahme. Nur aktivieren wenn der Klient nachweislich nicht in die \u00dc-Gruppe wechselt.</div></div>'+
+    '<div class="bp-field"><label for="bp-e-ed">Entlassdatum (final)</label>'+
+    '<input type="date" id="bp-e-ed" class="bp-input" value="'+h(c.entlassdatum||'')+'"'+dateAttrs('date')+'>'+
+    '<div class="bp-hint">Leer lassen solange noch nicht entschieden. Nach diesem Datum verschwindet der Klient aus der Liste.</div></div>'+
+    '</fieldset>'+
+    '</div>'+
+
+    '<div class="bp-modal-footer">'+
+    '<button class="bp-btn bp-btn-danger" data-bp-action="delete-client" data-bp-id="'+h(clientId)+'">L\u00f6schen</button>'+
+    '<div style="flex:1"></div>'+
+    '<button class="bp-btn" data-bp-action="close-modal">Abbrechen</button>'+
+    '<button class="bp-btn bp-btn-primary" data-bp-action="save-edit" data-bp-id="'+h(clientId)+'">Speichern</button>'+
+    '</div></div></div>';
+
+  var vsEl=document.getElementById('bp-e-vs');
+  var vdWrap=document.getElementById('bp-e-vdwrap');
+  vsEl.addEventListener('change',function(){vdWrap.style.display=this.value==='keine'?'none':'';});
+  bindEsc();
+}
+
+function fedit(id,lbl,type,val,req){
+  return '<div class="bp-field"><label for="'+id+'">'+lbl+(req?' <span class="bp-req">*</span>':'')+'</label>'+
+    '<input type="'+type+'" id="'+id+'" class="bp-input" value="'+h(val||'')+'"'+dateAttrs(type)+(req?' required':'')+'>'+
+    '</div>';
+}
+
+function handleEdit(clientId){
+  var name=val('bp-e-name'), auf=val('bp-e-auf'), kzt=val('bp-e-kzt');
+  var kzb=val('bp-e-kzb'), kzd=val('bp-e-kzd');
+  var goae=document.getElementById('bp-e-goae').checked;
+  var jupsy=document.getElementById('bp-e-jupsy').checked;
+  var btv=val('bp-e-btv'), btnv=val('bp-e-btnv');
+  var vs=val('bp-e-vs'), vb=vs!=='keine'?val('bp-e-vb'):null;
+  var kue=document.getElementById('bp-e-kue').checked;
+  var ed=val('bp-e-ed');
+  var err={};
+  if(!name||name.length<2) err['bp-e-name']='Name erforderlich';
+  if(!auf) err['bp-e-auf']='Aufnahmedatum erforderlich';
+  if(vs!=='keine'&&!vb) err['bp-e-vb']='Datum bei Verl\u00e4ngerung erforderlich';
+  if(auf&&!dateInRange(auf)) err['bp-e-auf']=dateRangeMsg();
+  if(kzb&&!dateInRange(kzb)) err['bp-e-kzb']=dateRangeMsg();
+  if(vb&&!dateInRange(vb)) err['bp-e-vb']=dateRangeMsg();
+  if(ed&&!dateInRange(ed)) err['bp-e-ed']=dateRangeMsg();
+  if(ed&&auf&&ed<auf) err['bp-e-ed']='Entlassdatum muss nach Aufnahme liegen';
+  if(Object.keys(err).length){showErr(err);return;}
+  var idx=state.clients.findIndex(function(c){return c.id===clientId;});
+  if(idx<0){setStatus('Klient nicht gefunden',true);return;}
+  var backup=JSON.parse(JSON.stringify(state.clients[idx]));
+  var editPatch={
+    name:name, aufnahmedatum:auf, kostenzusage_traeger:kzt,
+    kostenzusage_bis:kzb||null, kostenzusage_detail:kzd, goae:goae, jupsy:jupsy,
+    bt_verbal:btv, bt_nonverbal:btnv,
+    verlaengerung_status:vs, verlaengerung_bis:vb||null,
+    kein_ue_gruppe:kue, entlassdatum:ed||null,
+    updatedAt:new Date().toISOString()
+  };
+  Object.assign(state.clients[idx], editPatch);
+  renderTable(state); renderBanner(state); closeModal();
+  saveState(state, {replay:replaySetClientFields(clientId, editPatch, state.clients[idx])}).then(function(){setStatus('Gespeichert.');}).catch(function(e){
+    state.clients[idx]=backup; renderTable(state); renderBanner(state);
+    setStatus('Fehler: '+e.message,true); openEditModal(clientId);
+  });
+}
+
+function handleDelete(clientId){
+  var c=state.clients.find(function(x){return x.id===clientId;}); if(!c)return;
+  confirm2('Klient l\u00f6schen?',
+    'Soll "'+h(c.name)+'" wirklich gel\u00f6scht werden? Diese Aktion kann nicht r\u00fcckg\u00e4ngig gemacht werden.',
+    'Endg\u00fcltig l\u00f6schen',true)
+  .then(function(ok){
+    if(!ok)return;
+    var idx=state.clients.findIndex(function(x){return x.id===clientId;});
+    var backup=state.clients.splice(idx,1)[0];
+    renderTable(state); renderBanner(state); closeModal();
+    saveState(state, {replay:replayRemoveClient(clientId)}).then(function(){setStatus(c.name+' gel\u00f6scht.');}).catch(function(e){
+      state.clients.splice(idx,0,backup); renderTable(state); renderBanner(state);
+      setStatus('Fehler: '+e.message,true);
+    });
+  });
+}
+
+function confirm2(title,body,btnLabel,danger){
+  return new Promise(function(resolve){
+    var ov=document.createElement('div');
+    ov.className='bp-overlay';
+    ov.innerHTML='<div class="bp-modal bp-modal-sm"><div class="bp-modal-header"><span class="bp-modal-title">'+h(title)+'</span></div>'+
+      '<div class="bp-modal-body"><p>'+body+'</p></div>'+
+      '<div class="bp-modal-footer">'+
+      '<button class="bp-btn '+(danger?'bp-btn-danger':'bp-btn-primary')+'" id="bp-cy">'+h(btnLabel||'OK')+'</button>'+
+      '<button class="bp-btn" id="bp-cn">Abbrechen</button>'+
+      '</div></div>';
+    document.body.appendChild(ov);
+    ov.querySelector('#bp-cy').onclick=function(){ov.remove();resolve(true);};
+    ov.querySelector('#bp-cn').onclick=function(){ov.remove();resolve(false);};
+  });
+}
+
+// ── SPRINT 5: BANNER + QUICK-ACTIONS ─────────────────────────────────
+function renderBanner(st){
+  if(!st||!BANNER_EL)return;
+  var today=sod(new Date());
+  var urgent=(st.clients||[]).filter(function(c){
+    return computeStatus(c,today).code===S.ENT;
+  }).map(function(c){return {c:c,st:computeStatus(c,today)};});
+  if(!urgent.length){BANNER_EL.innerHTML='';return;}
+  var items=urgent.map(function(u){
+    var tb=u.st.tageBis;
+    var dayTxt=u.st.ueberfaellig?Math.abs(tb)+' T. \u00fcberf\u00e4llig!':tb+' T. bis Entscheidung';
+    var cls='bp-banner-item'+(u.st.ueberfaellig?' bp-banner-overdue':'');
+    var btns=canEdit?
+      '<button class="bp-btn bp-btn-sm" data-bp-action="quick-verlaengern" data-bp-id="'+h(u.c.id)+'">Verl\u00e4ngerung</button>'+
+      '<button class="bp-btn bp-btn-sm" data-bp-action="quick-entlassen" data-bp-id="'+h(u.c.id)+'">Entlassdatum festlegen</button>':'';
+    return '<div class="'+cls+'"><span class="bp-banner-name">'+h(u.c.name)+'</span>'+
+      '<span class="bp-banner-days">'+dayTxt+'</span>'+btns+'</div>';
+  }).join('');
+  BANNER_EL.innerHTML='<div class="bp-banner" role="alert" aria-live="polite">'+
+    '<div class="bp-banner-title">Entscheidung erforderlich ('+urgent.length+')</div>'+
+    items+'</div>';
+}
+
+function openQuickVerlaengernModal(clientId){
+  var c=state.clients.find(function(x){return x.id===clientId;}); if(!c)return;
+  var vE=vorlEntlass(c);
+  var vorschlag=vE?toISO(addDays(vE,14)):'';
+  MODAL_EL.innerHTML=qmodal('Verl\u00e4ngerung \u2014 '+h(c.name),
+    '<div class="bp-field"><label for="bp-qv-d">Verl\u00e4ngerung bis <span class="bp-req">*</span></label>'+
+    '<input type="date" id="bp-qv-d" class="bp-input" value="'+h(vorschlag)+'"'+dateAttrs('date')+'>'+
+    '<div class="bp-hint">Vorschlag: vorl. Entlassdatum + 2 Wochen</div></div>',
+    'confirm-quick-verlaengern',clientId,'Eintragen');
+  bindEsc();
+}
+
+function handleQuickVerlaengern(clientId){
+  var d=val('bp-qv-d');
+  if(!d){var el=document.getElementById('bp-qv-d');if(el)el.focus();return;}
+  if(!dateInRange(d)){setStatus(dateRangeMsg(),true);return;}
+  applyPatch(clientId,{verlaengerung_status:'zu_beantragen',verlaengerung_bis:d});
+}
+
+function openQuickEntlassenModal(clientId){
+  var c=state.clients.find(function(x){return x.id===clientId;}); if(!c)return;
+  var vE=vorlEntlass(c);
+  var vorschlag=vE?toISO(vE):'';
+  MODAL_EL.innerHTML=qmodal('Entlassdatum festlegen \u2014 '+h(c.name),
+    '<div class="bp-field"><label for="bp-qe-d">Entlassdatum (final) <span class="bp-req">*</span></label>'+
+    '<input type="date" id="bp-qe-d" class="bp-input" value="'+h(vorschlag)+'"'+dateAttrs('date')+'>'+
+    '<div class="bp-hint">Vorschlag: vorl. Entlassdatum</div></div>',
+    'confirm-quick-entlassen',clientId,'Festlegen');
+  bindEsc();
+}
+
+function handleQuickEntlassen(clientId){
+  var d=val('bp-qe-d');
+  if(!d){var el=document.getElementById('bp-qe-d');if(el)el.focus();return;}
+  if(!dateInRange(d)){setStatus(dateRangeMsg(),true);return;}
+  applyPatch(clientId,{entlassdatum:d});
+}
+
+// buildModal: einheitliches Overlay+Modal-Gerüst, gibt HTML-String zurück.
+// opts: {title, body, footer (Buttons-HTML), small:bool, closable:bool}
+function buildModal(opts){
+  opts=opts||{};
+  var sizeCls=opts.small?' bp-modal-sm':'';
+  var closeX=opts.closable===false?'':'<button class="bp-modal-close" data-bp-action="close-modal">&times;</button>';
+  return '<div class="bp-overlay" data-bp-action="close-modal">'+
+    '<div class="bp-modal'+sizeCls+'" role="dialog" aria-modal="true">'+
+    '<div class="bp-modal-header"><span class="bp-modal-title">'+(opts.title||'')+'</span>'+closeX+'</div>'+
+    '<div class="bp-modal-body">'+(opts.body||'')+'</div>'+
+    '<div class="bp-modal-footer">'+(opts.footer||'')+'</div>'+
+    '</div></div>';
+}
+
+function qmodal(title,body,action,id,btnLabel){
+  return buildModal({title:title, body:body, small:true,
+    footer:'<button class="bp-btn bp-btn-primary" data-bp-action="'+action+'" data-bp-id="'+h(id)+'">'+h(btnLabel)+'</button>'+
+           '<button class="bp-btn" data-bp-action="close-modal">Abbrechen</button>'});
+}
+
+// mutate(): zentraler Optimistic-Update-Zyklus mit Rollback.
+// applyFn(client) mutiert den Klienten in-place (oder gibt Patch-Objekt zurück).
+// opts: {close:true schließt Modal, onError:fn} — render+save+rollback einheitlich.
+function mutate(clientId, applyFn, opts){
+  opts=opts||{};
+  var idx=state.clients.findIndex(function(c){return c.id===clientId;});
+  if(idx<0)return false;
+  var client=state.clients[idx];
+  var backup=JSON.parse(JSON.stringify(client));
+  var ret=applyFn(client);
+  if(ret&&typeof ret==='object')Object.assign(client,ret);
+  client.updatedAt=new Date().toISOString();
+  // Delta erfassen: welche Felder hat der Nutzer auf welche Zielwerte gesetzt?
+  // (Idempotent für den Replay — auch bei relativen Operationen wie Toggles.)
+  var changed={};
+  Object.keys(client).forEach(function(k){
+    if(JSON.stringify(client[k])!==JSON.stringify(backup[k])) changed[k]=client[k];
+  });
+  if(opts.close)closeModal();
+  renderTable(state); renderBanner(state);
+  saveState(state, {replay:replaySetClientFields(clientId, changed, client)}).catch(function(e){
+    state.clients[idx]=backup; renderTable(state); renderBanner(state);
+    if(opts.onError)opts.onError(e);
+    else setStatus('Fehler: '+e.message,true);
+  });
+  return true;
+}
+
+// applyPatch: dünner Wrapper über mutate() — schließt Modal (Rückwärtskompat.)
+function applyPatch(clientId, patch){
+  mutate(clientId, function(){ return patch; }, {close:true});
+}
+
+
+// ── SPRINT 6: SPALTENAUSWAHL + PRINT VIEW ──────────────────────────────────
+// COLS: EINZIGE Quelle der Spalten. Jede Spalte definiert:
+//   idx     Spaltenindex → CSS-Klasse bp-col-{idx}
+//   key     stabiler Schlüssel (Print-Auswahl-Persistenz)
+//   label   Text in der Druck-Spaltenauswahl
+//   th      Text im Tabellenkopf (darf von label abweichen)
+//   thCls   zusätzliche th-Klasse (optional)
+//   always  immer sichtbar (nicht abwählbar)
+//   def     im Druck per Default sichtbar
+//   td(c,x) liefert die KOMPLETTE <td>…</td> für einen Klienten c;
+//           x = Kontext mit vorberechneten Werten (editBtn, statusCell, …)
+// thead UND tbody werden aus dieser Liste generiert → Index-Drift unmöglich.
+var COLS = [
+  {idx:0,  key:'status',       label:'Status',           th:'Status',           always:true,
+   td:function(c,x){return '<td class="bp-col-0 bp-status-cell">'+x.editBtn+(x.editBtn?' ':'')+x.statusCell+'</td>';}},
+  {idx:1,  key:'name',         label:'Name',             th:'Name', thCls:'bp-sticky-col', always:true,
+   td:function(c,x){return '<td class="bp-sticky-col bp-col-1">'+(canEdit?'<span class="bp-ec" data-bp-action="inline-edit" data-bp-id="'+h(c.id)+'" data-bp-field="name" data-bp-type="text">'+h(c.name)+'</span>':h(c.name))+'</td>';}},
+  {idx:2,  key:'aufnahme',     label:'Aufnahme',         th:'Aufnahme',         def:true,
+   td:function(c,x){return '<td class="bp-col-2 bp-ec" data-bp-action="inline-edit" data-bp-id="'+h(c.id)+'" data-bp-field="aufnahmedatum" data-bp-type="date">'+fmtDate(c.aufnahmedatum)+'</td>';}},
+  {idx:3,  key:'kz_traeger',   label:'KZ-Träger',        th:'Kostenträger',     def:true,
+   td:function(c,x){return '<td class="bp-col-3 bp-ec" data-bp-action="inline-edit" data-bp-id="'+h(c.id)+'" data-bp-field="kostenzusage_traeger" data-bp-type="text-kt">'+x.ktCell+'</td>';}},
+  {idx:4,  key:'kz_bis',       label:'Kostenzusage bis', th:'Kostenzusage bis', def:true,
+   td:function(c,x){return '<td class="bp-col-4 bp-ec" data-bp-action="inline-edit" data-bp-id="'+h(c.id)+'" data-bp-field="kostenzusage_bis" data-bp-type="date">'+fmtDate(c.kostenzusage_bis)+x.kzAblauf+'</td>';}},
+  {idx:5,  key:'beh_wochen',   label:'Beh.w.',           th:'Beh.w.',           def:true,
+   td:function(c,x){return '<td class="bp-center bp-col-5">'+(x.bW!=null?x.bW:'<span class="bp-na">—</span>')+'</td>';}},
+  {idx:6,  key:'verl_bis',     label:'Verl. bis',        th:'Verl. bis',        def:true,
+   td:function(c,x){return '<td class="bp-col-6 bp-ec" data-bp-action="inline-edit" data-bp-id="'+h(c.id)+'" data-bp-field="verlaengerung_bis" data-bp-type="date">'+fmtDate(c.verlaengerung_bis)+'</td>';}},
+  {idx:7,  key:'goae',         label:'WL',               th:'WL',               def:false,
+   td:function(c,x){return '<td class="bp-center bp-col-7 bp-ec" data-bp-action="inline-toggle" data-bp-id="'+h(c.id)+'" data-bp-field="goae" title="Klicken zum Umschalten">'+(c.goae?'&#10003;':'–')+'</td>';}},
+  {idx:8,  key:'bt_verbal',    label:'Verbal',           th:'Verbal',           def:true,
+   td:function(c,x){return '<td class="bp-col-8">'+x.btVCell+'</td>';}},
+  {idx:9,  key:'bt_nonverbal', label:'Non-verbal',       th:'Non-verbal',       def:true,
+   td:function(c,x){return '<td class="bp-col-9">'+x.btNvCell+'</td>';}},
+  {idx:10, key:'kein_ue',      label:'Ü-Gr.?',           th:'Ü-Gr.?',           def:false,
+   td:function(c,x){return '<td class="bp-center bp-col-10 bp-ec" data-bp-action="inline-toggle" data-bp-id="'+h(c.id)+'" data-bp-field="kein_ue_gruppe" title="Ü-Gruppe geplant? Klicken zum Umschalten">'+(c.kein_ue_gruppe?'Nein':'Ja')+'</td>';}},
+  {idx:11, key:'vorl_entlass', label:'vorl. Entlass',    th:'vorl. Entlass',    def:true,
+   td:function(c,x){return '<td class="bp-col-11">'+x.vECell+'</td>';}},
+  {idx:12, key:'ue_gruppe',    label:'Ü-Gruppe',         th:'Ü-Gruppe',         def:true,
+   td:function(c,x){return '<td class="bp-center bp-col-12">'+(x.ueD?fmtDate(toISO(x.ueD)):'')+'</td>';}},
+  {idx:13, key:'entlass',      label:'Entlass (final)',  th:'Entlass (final)',  always:true, def:true,
+   td:function(c,x){return '<td class="bp-col-13 bp-ec" data-bp-action="inline-edit" data-bp-id="'+h(c.id)+'" data-bp-field="entlassdatum" data-bp-type="date">'+fmtDate(c.entlassdatum)+'</td>';}},
+  {idx:14, key:'jupsy',        label:'JuPsy',            th:'JuPsy',            def:false, defView:false,
+   td:function(c,x){return '<td class="bp-center bp-col-14 bp-ec" data-bp-action="inline-toggle" data-bp-id="'+h(c.id)+'" data-bp-field="jupsy" title="JuPsy \u2014 Klicken zum Umschalten">'+(c.jupsy?'&#10003;':'\u2013')+'</td>';}}
+];
+
+// Detail-Elemente innerhalb von Zellen (keine eigene Spalte) — separat ab-/anwählbar,
+// in Anzeige (Einstellungen) UND Druck (Druckdialog).
+var SUBCOLS = [
+  {key:'kt_detail', label:'Kostenträger-Detail', css:'.bp-kt-detail'},
+  {key:'kz_ablauf', label:'Ablauf Kostenzusage', css:'.bp-kz-ablauf'}
+];
+
+// Sammelt CSS-Regeln für ABGEWÄHLTE Spalten + Detail-Elemente.
+// isPrint=true → Druck-Defaults (col.def); isPrint=false (Anzeige) → Default alles sichtbar.
+function collectHideRules(sel, isPrint){
+  sel=sel||{};
+  var rules=[];
+  COLS.forEach(function(col){
+    if(col.always)return;
+    var def = isPrint ? (col.def!==false) : (col.defView!==false);
+    var on = sel.hasOwnProperty(col.key) ? !!sel[col.key] : def;
+    if(!on) rules.push('.bp-root .bp-col-'+col.idx+'{display:none !important}');
+  });
+  SUBCOLS.forEach(function(sc){
+    var on = sel.hasOwnProperty(sc.key) ? !!sel[sc.key] : true;
+    if(!on) rules.push('.bp-root '+sc.css+'{display:none !important}');
+  });
+  return rules.join('');
+}
+
+function buildColToggles(sel, isPrint, cbClass){
+  sel=sel||{};
+  var st='style="width:48%;display:inline-flex;margin-bottom:4px"';
+  var out=[];
+  COLS.forEach(function(col){
+    if(col.always){
+      out.push('<label class="bp-checkbox-label" '+st+'><input type="checkbox" class="'+cbClass+'" data-col-key="'+col.key+'" disabled checked> '+h(col.label)+'</label>');
+      return;
+    }
+    var def = isPrint ? (col.def!==false) : (col.defView!==false);
+    var on = sel.hasOwnProperty(col.key) ? !!sel[col.key] : def;
+    out.push('<label class="bp-checkbox-label" '+st+'><input type="checkbox" class="'+cbClass+'" data-col-key="'+col.key+'"'+(on?' checked':'')+'> '+h(col.label)+'</label>');
+  });
+  SUBCOLS.forEach(function(sc){
+    var on = sel.hasOwnProperty(sc.key) ? !!sel[sc.key] : true;
+    out.push('<label class="bp-checkbox-label" '+st+'><input type="checkbox" class="'+cbClass+'" data-col-key="'+sc.key+'"'+(on?' checked':'')+'> '+h(sc.label)+'</label>');
+  });
+  return out.join('');
+}
+
+function readColToggles(cbClass){
+  var sel={};
+  MODAL_EL.querySelectorAll('.'+cbClass).forEach(function(cb){
+    sel[cb.getAttribute('data-col-key')]=cb.checked;
+  });
+  return sel;
+}
+
+// Anzeige-Sichtbarkeit (Einstellungen) — @media screen, Druck bleibt unberührt
+function applyViewCSS(){
+  var old=document.getElementById('bp-view-style-'+instId); if(old)old.remove();
+  var rules=collectHideRules(state.viewCols, false);
+  if(!rules)return;
+  var s=document.createElement('style');
+  s.id='bp-view-style-'+instId;
+  s.textContent='@media screen{'+rules+'}';
+  document.head.appendChild(s);
+}
+
+// Druck-Sichtbarkeit (Druckdialog) — @media print, unabhängig von der Anzeige
+function applyPrintCSS(){
+  var old=document.getElementById('bp-col-style-'+instId); if(old)old.remove();
+  var rules=collectHideRules(state.printCols, true);
+  if(!rules)return;
+  var s=document.createElement('style');
+  s.id='bp-col-style-'+instId;
+  s.textContent='@media print{'+rules+'}';
+  document.head.appendChild(s);
+}
+
+function openPrintModal(){
+  var cbs=buildColToggles(state.printCols, true, 'bp-print-col-cb');
+  MODAL_EL.innerHTML=
+    '<div class="bp-overlay" data-bp-action="close-modal">'+
+    '<div class="bp-modal bp-modal-sm" role="dialog" aria-modal="true">'+
+    '<div class="bp-modal-header"><span class="bp-modal-title">&#128438; Drucken</span>'+
+    '<button class="bp-modal-close" data-bp-action="close-modal">&times;</button></div>'+
+    '<div class="bp-modal-body">'+
+    '<div class="bp-field"><label>Sichtbare Spalten</label>'+
+    '<div style="display:flex;flex-wrap:wrap">'+cbs+'</div>'+
+    '<div class="bp-hint">Status und Name sind immer sichtbar. Auswahl wird gespeichert.</div></div>'+
+    '<div class="bp-field"><label for="bp-print-date">Stand drucken zum</label>'+
+    '<input type="date" id="bp-print-date" class="bp-input" value="'+toISO(new Date())+'"'+dateAttrs('date')+'>'+
+    '<div class="bp-hint">Standardm\u00e4\u00dfig heute (aktuelle Teilnehmer:innen + \u00dc-Gruppe, ohne zuk\u00fcnftige). Ein sp\u00e4teres Datum druckt den voraussichtlichen Stand zu diesem Tag \u2014 mit Status, Fristen und den dann anwesenden Teilnehmer:innen.</div></div>'+
+    '</div>'+
+    '<div class="bp-modal-footer">'+
+    '<button class="bp-btn" data-bp-action="close-modal">Abbrechen</button>'+
+    '<button class="bp-btn bp-btn-primary" data-bp-action="confirm-print">&#128438; Drucken</button>'+
+    '</div></div></div>';
+  bindEsc();
+}
+
+function handleConfirmPrint(){
+  state.printCols=readColToggles('bp-print-col-cb');
+  saveState(state, {replay: replaySetTop({printCols: state.printCols})}).catch(function(){});
+  var dInp=document.getElementById('bp-print-date');
+  var todayIso=toISO(new Date());
+  // Nur wenn ein abweichendes, gültiges Datum gewählt wurde → Stichtags-Vorschau.
+  var asOf=(dInp && dInp.value && dInp.value!==todayIso && dateInRange(dInp.value)) ? dInp.value : null;
+  applyPrintCSS();
+  closeModal();
+  printView(asOf);
+}
+
+function printView(asOf){
+  // Dateiname = Macro-Titel + (Stichtags-)Datum
+  var origTitle = document.title;
+  var d = asOf ? new Date(asOf+'T00:00:00') : new Date();
+  var dd = String(d.getDate()).padStart(2,'0');
+  var mm = String(d.getMonth()+1).padStart(2,'0');
+  var dateStr = dd+'.'+mm+'.'+d.getFullYear();
+  document.title = 'Belegungsplaner '+instId+'_'+dateStr;
+  if(asOf) renderTable(state, asOf);   // Stichtags-Vorschau: Status/Fristen/Teilnehmer zum Datum
+  var restored = false;
+  function restore(){ if(restored)return; restored=true; document.title = origTitle; if(asOf) renderTable(state); }
+  window.addEventListener('afterprint', restore, {once:true});
+  setTimeout(restore, 2000); // Fallback falls afterprint nicht feuert
+  requestAnimationFrame(function(){window.print();});
+}
+
+// ── SPRINT 7: VERSAND ─────────────────────────────────────────────────────
+function openVersandModal(){
+  var tpl=state.mailTemplate||{};
+  var to=tpl.to||'aufnahme@systelios.de';
+  var cc=tpl.cc||'';
+  var subject=tpl.subject||getDefaultSubject();
+  var body=tpl.body?ensureLinkInBody(dropLinkAnchor(tpl.body)):getDefaultBody();
+  var linkAdded=!!(tpl.body && !bodyHasLink(tpl.body));   // Link neu eingefuegt
+  var perma=getPermaLink();
+  MODAL_EL.innerHTML=
+    '<div class="bp-overlay" data-bp-action="close-modal">'+
+    '<div class="bp-modal bp-modal-wide" role="dialog" aria-modal="true">'+
+    '<div class="bp-modal-header"><span class="bp-modal-title">&#9993; Belegungsliste versenden</span>'+
+    '<button class="bp-modal-close" data-bp-action="close-modal">&times;</button></div>'+
+    '<div class="bp-modal-body">'+
+    '<div class="bp-field"><label for="bp-v-to">An <span class="bp-req">*</span></label>'+
+    '<input type="email" id="bp-v-to" class="bp-input" value="'+h(to)+'"></div>'+
+    '<div class="bp-field"><label for="bp-v-cc">CC</label>'+
+    '<input type="email" id="bp-v-cc" class="bp-input" value="'+h(cc)+'"></div>'+
+    '<div class="bp-field"><label for="bp-v-subject">Betreff</label>'+
+    '<input type="text" id="bp-v-subject" class="bp-input" value="'+h(subject)+'"></div>'+
+    '<div class="bp-field"><label for="bp-v-body">Nachricht</label>'+
+    '<textarea id="bp-v-body" class="bp-input" rows="9" style="resize:vertical">'+h(body)+'</textarea>'+
+    '<div class="bp-hint">Permalink &mdash; derselbe Kurzlink wie im Confluence-Teilen-Dialog, bleibt nach Umbenennen/Verschieben gültig:<br>'+
+    '<a href="'+h(perma)+'" target="_blank" rel="noopener" class="bp-perma-link">'+h(perma)+'</a>'+
+    (linkAdded?'<br><strong>Hinweis:</strong> Der Link wurde in Ihre gespeicherte Vorlage eingefügt &mdash; Position frei anpassbar.':'')+
+    '</div></div>'+
+    '</div>'+
+    '<div class="bp-modal-footer">'+
+    '<button class="bp-btn" data-bp-action="close-modal">Schließen</button>'+
+    '<div style="flex:1"></div>'+
+    '<button class="bp-btn bp-btn-primary" data-bp-action="versand-mail">&#9993; Mail öffnen</button>'+
+    '</div></div></div>';
+  bindEsc();
+  // Kurzlink noch nicht da? Nachladen und den bereits gerenderten Dialog
+  // in-place aktualisieren (nur solange er offen ist und unveraendert).
+  if(!tinyLink){
+    var shownBefore=perma;
+    fetchTinyLink().then(function(t){
+      if(!t) return;
+      var ta=document.getElementById('bp-v-body'); if(!ta) return;   // Dialog zu
+      ta.value=swapLink(ta.value, shownBefore, getPermaLink());
+      var a=MODAL_EL.querySelector('a.bp-perma-link');
+      if(a){ a.href=getPermaLink(); a.textContent=getPermaLink(); }
+    });
+  }
+}
+
+function getDefaultSubject(){
+  return 'Belegungsliste '+instId+' — Stand '+new Date().toLocaleDateString('de-DE');
+}
+
+// Textbaustein mit dem Permalink. LINK_LABEL dient zugleich als Marker,
+// um eine bereits vorhandene Einbettung zu erkennen (keine Dubletten).
+var LINK_LABEL='Immer aktueller Stand online:';
+function getLinkBlock(){ return LINK_LABEL+'\n'+getPermaLink(); }
+
+// bodyHasLink: erkennt den Baustein am Label ODER an der URL (auch ohne Anker,
+// falls jemand den Link von Hand gekuerzt hat).
+function bodyHasLink(body){
+  if(!body) return false;
+  if(body.indexOf(LINK_LABEL)>=0) return true;
+  return linkVariants().some(function(u){ return body.indexOf(u)>=0; });
+}
+
+// ensureLinkInBody: haengt den Link-Baustein an einen gespeicherten Text an,
+// der ihn noch nicht enthaelt (Vorlagen aus der Zeit vor diesem Feature).
+// Wird eine Grussformel am Ende erkannt, wird davor eingefuegt statt dahinter.
+var GRUSS_RE=/\n[ \t]*((?:Beste|Viele|Herzliche|Liebe|Freundliche)\s+Gr(?:ü|ue)(?:ß|ss)e|Mit\s+freundlichen\s+Gr(?:ü|ue)(?:ß|ss)en|LG|VG|MfG)\b[\s\S]*$/;
+function ensureLinkInBody(body){
+  if(bodyHasLink(body)) return body;
+  var block=getLinkBlock();
+  if(!body || !body.trim()) return block;
+  var m=body.match(GRUSS_RE);
+  if(m) return body.slice(0, m.index).replace(/\s+$/,'')+'\n\n'+block+'\n'+m[0];
+  return body.replace(/\s+$/,'')+'\n\n'+block;
+}
+
+// swapLink: ersetzt eine bereits eingesetzte lange Form durch den Kurzlink,
+// falls dieser erst nach dem Rendern des Dialogs verfuegbar wurde.
+function swapLink(text, fromUrl, toUrl){
+  if(!text || !fromUrl || !toUrl || fromUrl===toUrl) return text;
+  return text.split(fromUrl).join(toUrl);
+}
+
+function getDefaultBody(){
+  var ac=getActiveCount(state.clients);
+  return 'Liebe Kollegin, lieber Kollege,\n\n'+
+    'hier der Link zur Belegungsliste '+instId+'.\n\n'+
+    'Stand: '+new Date().toLocaleDateString('de-DE')+'\n'+
+    'Aktive Klienten: '+ac+'\n\n'+
+    getLinkBlock()+'\n\n'+
+    'Bei Rückfragen einfach melden.\n\nBeste Grüße';
+}
+
+function handleVersandMail(){
+  var to=val('bp-v-to'), cc=val('bp-v-cc');
+  var subject=val('bp-v-subject');
+  var bodyEl=document.getElementById('bp-v-body');
+  var body=bodyEl?bodyEl.value:'';
+  if(!to){showErr({'bp-v-to':'Empfänger erforderlich'});return;}
+  if(body.length>1500) setStatus('Hinweis: Nachricht ist lang — könnte in manchen Mail-Clients gekürzt werden.');
+  state.mailTemplate={to:to,cc:cc,subject:subject,body:body};
+  saveState(state, {replay: replaySetTop({mailTemplate: state.mailTemplate})}).catch(function(){});
+  var params=[];
+  if(cc)      params.push('cc='+encodeURIComponent(cc));
+  if(subject) params.push('subject='+encodeURIComponent(subject));
+  if(body)    params.push('body='+encodeURIComponent(body));
+  var mailto='mailto:'+encodeURIComponent(to)+(params.length?'?'+params.join('&'):'')
+  closeModal();
+  setTimeout(function(){
+    window.location.href=mailto;
+    setTimeout(function(){
+      setStatus('Falls kein Mail-Programm geöffnet hat: manuell senden an '+to);
+    },3000);
+  },150);
+}
+
+// Flexible Datumseingabe: DD.MM.YYYY / DD.MM.YY / DD.MM. → ISO
+function parseFlexDate(str){
+  if(!str)return null;
+  str=str.trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(str))return str;
+  var m=str.match(/^(\d{1,2})\.(\d{1,2})\.?(\d{2,4})?$/);
+  if(m){
+    var d=m[1].padStart(2,'0');
+    var mo=m[2].padStart(2,'0');
+    var y=m[3]||String(new Date().getFullYear());
+    if(y.length===2)y='20'+y;
+    return y+'-'+mo+'-'+d;
+  }
+  return null;
+}
+function wireFlexDate(input){
+  input.addEventListener('paste',function(e){
+    e.preventDefault();
+    var txt=(e.clipboardData||window.clipboardData).getData('text');
+    var iso=parseFlexDate(txt);
+    if(iso)input.value=iso;
+  });
+  input.addEventListener('blur',function(){
+    var iso=parseFlexDate(input.value);
+    if(iso&&iso!==input.value)input.value=iso;
+  });
+}
+
+
+// ════════════════════════════════════════════════════════════════════
+// SELBSTTEST — Unit + Integration, Sandbox mit Schreib-Garantie
+// ════════════════════════════════════════════════════════════════════
+var SELFTEST = {
+  results: [],
+  recorders: null,
+  snap: null,
+
+  log: function(group, name, ok, detail){
+    this.results.push({g:group, n:name, ok:!!ok, d:detail||''});
+  },
+  assertEq: function(group, name, actual, expected){
+    var ok = JSON.stringify(actual)===JSON.stringify(expected);
+    this.log(group, name, ok, ok?'':'erwartet '+JSON.stringify(expected)+', war '+JSON.stringify(actual));
+  },
+
+  // Fixture-Set: festes "heute" + alle 8 Status-Zustände
+  buildFixture: function(){
+    var today = sod(new Date()); // heute, deterministisch relativ zur Ausführung
+    function d(off){
+      var dt = new Date(today); dt.setDate(dt.getDate()+off); return toISO(dt);
+    }
+    function base(id, name){
+      return {id:id, name:name, aufnahmedatum:'', kostenzusage_traeger:'PKV',
+              kostenzusage_traeger_detail:'', kostenzusage_bis:'', verlaengerung_bis:'',
+              verlaengerung_status:'keine', vorl_entlassdatum:'', entlassdatum:'',
+              kein_ue_gruppe:false, goae:false, jupsy:false, bt_verbal:'', bt_nonverbal:''};
+    }
+    var stabil = base('fx_stab','Fx Stabil');
+      stabil.aufnahmedatum=d(-30); stabil.kostenzusage_bis=d(30);
+    var neu = base('fx_neu','Fx Neu');
+      neu.aufnahmedatum=d(-5); neu.kostenzusage_bis=d(35);
+    var ent = base('fx_ent','Fx Ent');
+      ent.aufnahmedatum=d(-40); ent.kostenzusage_bis=d(10); // tb=10 < 17
+    var vzub = base('fx_vzub','Fx VZUB');
+      vzub.aufnahmedatum=d(-60); vzub.kostenzusage_bis=d(7); vzub.verlaengerung_bis=d(21);
+    var vbea = base('fx_vbea','Fx VBEA');
+      vbea.aufnahmedatum=d(-60); vbea.kostenzusage_bis=d(7); vbea.verlaengerung_bis=d(21);
+      vbea.verlaengerung_status='beantragt';
+    var vgeh = base('fx_vgeh','Fx VGEH');
+      vgeh.aufnahmedatum=d(-60); vgeh.kostenzusage_bis=d(28); vgeh.verlaengerung_status='genehmigt';
+    var ueg = base('fx_ueg','Fx UE');
+      ueg.aufnahmedatum=d(-30); ueg.kostenzusage_bis=d(5); // ueGruppe = -1 (vergangen)
+    var entl = base('fx_entl','Fx Entlassen');
+      entl.aufnahmedatum=d(-90); entl.kostenzusage_bis=d(-30); entl.entlassdatum=d(-30);
+
+    return {
+      today: today,
+      state: {
+        schemaVersion:1, gruppenbezeichnung:'Testgruppe',
+        config:{entscheidungsGrenze:17}, printCols:{}, mailTemplate:{},
+        clients:[stabil, neu, ent, vzub, vbea, vgeh, ueg, entl]
+      }
+    };
+  },
+
+  // Sandbox: Snapshot + Recorder, kein echter REST-Aufruf
+  startSandbox: function(fix){
+    // 1. Echtes Modell sichern (deep clone, JSON-Vergleich später)
+    this.snap = {
+      stateJson: JSON.stringify(state),
+      state: JSON.parse(JSON.stringify(state)),
+      saveState: saveState,
+      loadState: loadState
+    };
+    this.recorders = {saveCalls:0, loadCalls:0, lastSave:null};
+
+    // 2. REST-Funktionen durch No-Op-Recorder ersetzen
+    saveState = function(s){
+      SELFTEST.recorders.saveCalls++;
+      SELFTEST.recorders.lastSave = JSON.parse(JSON.stringify(s));
+      return Promise.resolve(s);
+    };
+    loadState = function(){
+      SELFTEST.recorders.loadCalls++;
+      return Promise.resolve(JSON.parse(JSON.stringify(fix.state)));
+    };
+
+    // 3. Fixture als aktiven State installieren
+    state = JSON.parse(JSON.stringify(fix.state));
+  },
+
+  endSandbox: function(){
+    if(!this.snap)return;
+    saveState = this.snap.saveState;
+    loadState = this.snap.loadState;
+    state = this.snap.state;
+    var origJson = this.snap.stateJson;
+    this.snap = null;
+    // Re-Render mit echten Daten
+    renderTable(state); renderBanner(state);
+    applyViewCSS();   // Spalten-Sichtbarkeit des ECHTEN States wiederherstellen
+    return origJson;
+  },
+
+  // ───────────────────────────── UNIT ─────────────────────────────
+  runUnit: function(fix){
+    var t = this;
+
+    // parseFlexDate
+    t.assertEq('Unit','parseFlexDate DD.MM.YYYY', parseFlexDate('27.05.2026'), '2026-05-27');
+    t.assertEq('Unit','parseFlexDate DD.MM.YY', parseFlexDate('27.05.26'), '2026-05-27');
+    t.assertEq('Unit','parseFlexDate DD.MM. = aktuelles Jahr',
+               parseFlexDate('27.05.'), String(new Date().getFullYear())+'-05-27');
+    t.assertEq('Unit','parseFlexDate ISO-Passthrough', parseFlexDate('2026-05-27'), '2026-05-27');
+    t.assertEq('Unit','parseFlexDate ungültig → null', parseFlexDate('xyz'), null);
+    t.assertEq('Unit','parseFlexDate leer → null', parseFlexDate(''), null);
+
+    // getEntscheidungsGrenze
+    state.config = {entscheidungsGrenze: 21};
+    t.assertEq('Unit','getEntscheidungsGrenze: aus config', getEntscheidungsGrenze(), 21);
+    state.config = {};
+    t.assertEq('Unit','getEntscheidungsGrenze: Default 17', getEntscheidungsGrenze(), 17);
+    // ── Bezugstherapeuten: Settings > Macro-Parameter ──
+    var _bakPV=paramThVerbalList.slice(), _bakPNV=paramThNvList.slice();
+    paramThVerbalList=['Anna','Bert']; paramThNvList=['Cara'];
+    state.config = {};
+    t.assertEq('Unit','Therapeuten: Fallback auf Macro-Parameter (verbal)',
+               getThVerbalList().join(','), 'Anna,Bert');
+    t.assertEq('Unit','Therapeuten: Fallback auf Macro-Parameter (non-verbal)',
+               getThNvList().join(','), 'Cara');
+    t.assertEq('Unit','Therapeuten: Herkunft = param', thSource('thVerbal'), 'param');
+    state.config = {thVerbal:['Xenia','Yves']};
+    t.assertEq('Unit','Therapeuten: Settings haben Vorrang',
+               getThVerbalList().join(','), 'Xenia,Yves');
+    t.assertEq('Unit','Therapeuten: Herkunft = settings', thSource('thVerbal'), 'settings');
+    t.assertEq('Unit','Therapeuten: non-verbal weiterhin Parameter-Fallback',
+               getThNvList().join(','), 'Cara');
+    state.config = {thVerbal:[]};
+    t.assertEq('Unit','Therapeuten: leere Settings-Liste gewinnt (Freitext)',
+               getThVerbalList().length, 0);
+    t.assertEq('Unit','parseThList: Komma/Semikolon/Zeilenumbruch',
+               parseThList('Anna, Bert;Cara\nDoro').join('|'), 'Anna|Bert|Cara|Doro');
+    t.assertEq('Unit','parseThList: trimmt, entfernt Leere + Duplikate',
+               parseThList([' Anna ','','anna','Bert']).join('|'), 'Anna|Bert');
+    t.log('Unit','thField: unbekannter Bestandswert bleibt als Option erhalten',
+          thField('x',['Anna'],'Zoe').indexOf('>Zoe<')>=0);
+    t.log('Unit','thField: leere Liste → Freitext-Input',
+          thField('x',[],'Zoe').indexOf('<input')>=0);
+    paramThVerbalList=_bakPV; paramThNvList=_bakPNV;
+
+    // ── Permalink / Mail-Einbettung ──
+    var _pl=getPermaLink();
+    t.log('Unit','getPermaLink: absolute http(s)-URL', /^https?:\/\//.test(_pl));
+    t.log('Unit','getPermaLink: Kurzlink /x/ oder lange Form',
+          _pl.indexOf('/x/')>=0 || _pl.indexOf('pageId=')>=0 || _pl.indexOf('/display/')>=0);
+    t.log('Unit','getLongLink: immer verfügbare Fallback-Form', /^https?:\/\//.test(getLongLink()));
+    t.log('Unit','linkVariants: enthält lange Form (Dubletten-Erkennung)',
+          linkVariants().indexOf(getLongLink())>=0);
+    t.log('Unit','bodyHasLink: erkennt auch alte Fassung mit Anker',
+          bodyHasLink('alt: '+getLongLink()+linkAnchor()));
+    t.assertEq('Unit','swapLink: ersetzt lange Form durch Kurzlink',
+               swapLink('Siehe http://a/lang hier','http://a/lang','http://a/x/AB'),
+               'Siehe http://a/x/AB hier');
+    t.assertEq('Unit','swapLink: identische URLs → unverändert',
+               swapLink('Text','http://a','http://a'), 'Text');
+    t.log('Unit','bodyHasLink: erkennt auch die lange Form',
+          bodyHasLink('siehe '+getLongLink()));
+    t.log('Unit','getPermaLink: ohne Anker', _pl.indexOf('#')<0);
+    t.assertEq('Unit','dropLinkAnchor: entfernt alten Anker hinter dem Link',
+               dropLinkAnchor('Siehe '+getLongLink()+linkAnchor()+' — Ende'),
+               'Siehe '+getLongLink()+' — Ende');
+    t.assertEq('Unit','dropLinkAnchor: Text ohne Anker unverändert',
+               dropLinkAnchor('Nur Text.'), 'Nur Text.');
+    t.log('Unit','dropLinkAnchor: fremde Fragmente bleiben stehen',
+          dropLinkAnchor('http://andere/seite#abschnitt').indexOf('#abschnitt')>=0);
+    t.log('Unit','getLinkBlock: Label + URL', getLinkBlock().indexOf(_pl)>=0 && getLinkBlock().indexOf(LINK_LABEL)>=0);
+    t.log('Unit','getDefaultBody: Permalink eingebettet', getDefaultBody().indexOf(_pl)>=0);
+    t.log('Unit','getDefaultBody: kein PDF-Anhang mehr angekündigt',
+          getDefaultBody().indexOf('PDF')<0 && getDefaultBody().indexOf('anbei')<0);
+    t.log('Unit','bodyHasLink: erkennt Label', bodyHasLink('bla\n'+LINK_LABEL+'\nirgendwas'));
+    t.log('Unit','bodyHasLink: erkennt URL ohne Anker', bodyHasLink('siehe '+_pl.split('#')[0]));
+    t.log('Unit','bodyHasLink: leerer Text → false', bodyHasLink('')===false);
+    t.assertEq('Unit','ensureLinkInBody: idempotent (kein zweiter Block)',
+               ensureLinkInBody(ensureLinkInBody('Text\n\nBeste Grüße')),
+               ensureLinkInBody('Text\n\nBeste Grüße'));
+    var _mig=ensureLinkInBody('Hallo,\n\nanbei die Liste.\n\nBeste Grüße\nCarsten');
+    t.log('Unit','ensureLinkInBody: Link vor der Grußformel eingefügt',
+          _mig.indexOf(_pl)>=0 && _mig.indexOf(_pl)<_mig.indexOf('Beste Grüße'));
+    t.log('Unit','ensureLinkInBody: Grußformel bleibt erhalten',
+          _mig.indexOf('Beste Grüße\nCarsten')>=0);
+    t.log('Unit','ensureLinkInBody: ohne Grußformel → am Ende',
+          ensureLinkInBody('Nur ein Satz.').indexOf(_pl)>0);
+    t.assertEq('Unit','ensureLinkInBody: leerer Text → nur Link-Block',
+               ensureLinkInBody(''), getLinkBlock());
+
+    state.config = {entscheidungsGrenze: 17}; // reset für Status-Tests
+
+    // getActiveCount: 7 von 8 (entlassen ausgeschlossen)
+    t.assertEq('Unit','getActiveCount: ENTLASSEN+UE ausgeschlossen (6 von 8)',
+               getActiveCount(fix.state.clients), 6);
+
+    // computeStatus für jeden Fixture-Klienten
+    var byId = {};
+    fix.state.clients.forEach(function(c){ byId[c.id]=c; });
+    t.assertEq('Status','fx_stab → stabil',  computeStatus(byId.fx_stab, fix.today).code, 'stabil');
+    t.assertEq('Status','fx_neu → aufnahme_neu', computeStatus(byId.fx_neu, fix.today).code, 'aufnahme_neu');
+    t.assertEq('Status','fx_ent → entscheidung_faellig', computeStatus(byId.fx_ent, fix.today).code, 'entscheidung_faellig');
+    t.assertEq('Status','fx_vzub → verl_zu_beantragen', computeStatus(byId.fx_vzub, fix.today).code, 'verl_zu_beantragen');
+    t.assertEq('Status','fx_vbea → verl_beantragt', computeStatus(byId.fx_vbea, fix.today).code, 'verl_beantragt');
+    t.assertEq('Status','fx_vgeh → verl_genehmigt', computeStatus(byId.fx_vgeh, fix.today).code, 'verl_genehmigt');
+    t.assertEq('Status','fx_ueg → in_ue_gruppe', computeStatus(byId.fx_ueg, fix.today).code, 'in_ue_gruppe');
+    t.assertEq('Status','fx_entl → entlassen', computeStatus(byId.fx_entl, fix.today).code, 'entlassen');
+
+    // ── Boundary: Entscheidungsgrenze ist exklusiv (<, nicht <=) ──
+    var bClient = JSON.parse(JSON.stringify(byId.fx_stab));
+    bClient.kostenzusage_bis = (function(){ var d=new Date(fix.today); d.setDate(d.getDate()+17); return toISO(d); })();
+    t.assertEq('Unit','Grenze 17: tb=17 → stabil (Grenze exklusiv)',
+               computeStatus(bClient, fix.today).code, 'stabil');
+    bClient.kostenzusage_bis = (function(){ var d=new Date(fix.today); d.setDate(d.getDate()+16); return toISO(d); })();
+    t.assertEq('Unit','Grenze 17: tb=16 → entscheidung_faellig',
+               computeStatus(bClient, fix.today).code, 'entscheidung_faellig');
+
+    // ── Überfällig: tb<0 → ueberfaellig:true (rot statt orange) ──
+    var oClient = JSON.parse(JSON.stringify(byId.fx_stab));
+    oClient.kostenzusage_bis = (function(){ var d=new Date(fix.today); d.setDate(d.getDate()-5); return toISO(d); })();
+    var oSt = computeStatus(oClient, fix.today);
+    t.assertEq('Unit','Überfällig: Code = entscheidung_faellig', oSt.code, 'entscheidung_faellig');
+    t.assertEq('Unit','Überfällig: ueberfaellig=true', oSt.ueberfaellig, true);
+    t.assertEq('Unit','Überfällig: tageBis negativ', oSt.tageBis<0, true);
+
+    // ── parseFlexDate: einstellige Tage/Monate ──
+    t.assertEq('Unit','parseFlexDate einstellig 5.6.26', parseFlexDate('5.6.26'), '2026-06-05');
+    t.assertEq('Unit','parseFlexDate einstellig 27.5.', parseFlexDate('27.5.'),
+               String(new Date().getFullYear())+'-05-27');
+
+    // ── vorlEntlass: verlaengerung_bis hat Vorrang vor kostenzusage_bis ──
+    var vC = {verlaengerung_bis:'2026-06-15', kostenzusage_bis:'2026-06-01'};
+    t.assertEq('Unit','vorlEntlass: verl_bis hat Vorrang',
+               toISO(vorlEntlass(vC)), '2026-06-15');
+    vC.verlaengerung_bis = '';
+    t.assertEq('Unit','vorlEntlass: kz_bis als Fallback',
+               toISO(vorlEntlass(vC)), '2026-06-01');
+    vC.kostenzusage_bis = '';
+    t.assertEq('Unit','vorlEntlass: beide leer → null', vorlEntlass(vC), null);
+
+    // ── ueGruppe: kein_ue_gruppe=true → null ──
+    var uC = {entlassdatum:'2026-06-15', kein_ue_gruppe:true};
+    t.assertEq('Unit','ueGruppe: kein_ue_gruppe → null', ueGruppe(uC), null);
+    uC.kein_ue_gruppe = false;
+    t.assertEq('Unit','ueGruppe: 6 Tage vor entlass', toISO(ueGruppe(uC)), '2026-06-09');
+
+    // ── Sortierung: feste, stabile Reihenfolge nach Aufnahmedatum (aufsteigend) ──
+    var da=function(off){var x=new Date(fix.today);x.setDate(x.getDate()+off);return toISO(x);};
+    var sA={id:'s_a', aufnahmedatum:da(-90), verlaengerung_status:'keine', kostenzusage_traeger:'PKV'};
+    var sB={id:'s_b', aufnahmedatum:da(-30), verlaengerung_status:'keine', kostenzusage_traeger:'PKV'};
+    var sC={id:'s_c', aufnahmedatum:da(-60), verlaengerung_status:'keine', kostenzusage_traeger:'PKV'};
+    t.assertEq('Unit','Sortierung: nach Aufnahmedatum aufsteigend',
+               sortClients([sB,sA,sC], fix.today).map(function(c){return c.id;}).join(','), 's_a,s_c,s_b');
+
+    // Entlassene ans Ende (trotz frühestem Aufnahmedatum)
+    var sEnt={id:'s_ent', aufnahmedatum:da(-200), entlassdatum:da(-1), verlaengerung_status:'keine', kostenzusage_traeger:'PKV'};
+    var sEndArr=sortClients([sEnt,sB,sA], fix.today).map(function(c){return c.id;});
+    t.assertEq('Unit','Sortierung: entlassen ans Ende', sEndArr[sEndArr.length-1], 's_ent');
+
+    // KERNANFORDERUNG — Stabilität: ein Status-Edit verschiebt die Zeile NICHT
+    var stabBefore=sortClients([sA,sB,sC], fix.today).map(function(c){return c.id;}).join(',');
+    var sBmod=JSON.parse(JSON.stringify(sB)); sBmod.verlaengerung_bis=da(20);   // Status → VZUB, Datum unverändert
+    t.assertEq('Unit','Sortierung stabil: Status-Edit verschiebt Zeile nicht',
+               sortClients([sA,sBmod,sC], fix.today).map(function(c){return c.id;}).join(','), stabBefore);
+    t.log('Unit','Stabilität: Status hat sich tatsächlich geändert',
+          computeStatus(sB,fix.today).code!==computeStatus(sBmod,fix.today).code);
+
+    // Tiebreak: gleiches Aufnahmedatum → deterministisch nach id
+    t.assertEq('Unit','Sortierung: Tiebreak nach id bei gleichem Datum',
+               sortClients([{id:'t_b',aufnahmedatum:da(-10),verlaengerung_status:'keine'},
+                            {id:'t_a',aufnahmedatum:da(-10),verlaengerung_status:'keine'}], fix.today)
+                 .map(function(c){return c.id;}).join(','), 't_a,t_b');
+
+    // ── Sortierbare Header: Spaltenwahl + Richtung (Live-Zustand sichern/wiederherstellen) ──
+    var _sk=sortKey, _sd=sortDir;
+    sortKey='name'; sortDir='asc';
+    t.assertEq('Unit','Header-Sort: Name aufsteigend',
+      sortClients([{id:'x',name:'Zeta',aufnahmedatum:da(-10)},{id:'y',name:'Alpha',aufnahmedatum:da(-5)}], fix.today).map(function(c){return c.name;}).join(','), 'Alpha,Zeta');
+    sortDir='desc';
+    t.assertEq('Unit','Header-Sort: Name absteigend',
+      sortClients([{id:'x',name:'Zeta',aufnahmedatum:da(-10)},{id:'y',name:'Alpha',aufnahmedatum:da(-5)}], fix.today).map(function(c){return c.name;}).join(','), 'Zeta,Alpha');
+    sortKey='jupsy'; sortDir='desc';
+    t.assertEq('Unit','Header-Sort: JuPsy (true zuerst)',
+      sortClients([{id:'a',jupsy:false,aufnahmedatum:da(-9)},{id:'b',jupsy:true,aufnahmedatum:da(-8)}], fix.today).map(function(c){return c.id;}).join(','), 'b,a');
+    sortKey=_sk; sortDir=_sd;   // Live-Sortierung wiederherstellen
+
+    // ── JuPsy-Spalte: existiert, Format wie WL, per Default abgewählt (Screen + Druck) ──
+    var jpCol=colByKey('jupsy');
+    t.log('Unit','JuPsy-Spalte vorhanden', !!jpCol);
+    t.log('Unit','JuPsy Format wie WL (inline-toggle, Haken)',
+      !!jpCol && jpCol.td({id:'a',jupsy:true},{}).indexOf('inline-toggle')>=0 && jpCol.td({id:'a',jupsy:true},{}).indexOf('&#10003;')>=0);
+    t.log('Unit','JuPsy Screen-Default abgewählt (Hide-Regel für bp-col-14)',
+      collectHideRules({}, false).indexOf('.bp-col-14{display:none')>=0);
+    t.log('Unit','JuPsy Druck-Default abgewählt',
+      collectHideRules({}, true).indexOf('.bp-col-14{display:none')>=0);
+    // ── „Entlass (final)" ist immer sichtbar (always) — auch bei expliziter Abwahl ──
+    t.log('Unit','Entlass (final): nie ausblendbar (Anzeige)',
+      collectHideRules({entlass:false}, false).indexOf('.bp-col-13{display:none')<0);
+    t.log('Unit','Entlass (final): nie ausblendbar (Druck)',
+      collectHideRules({entlass:false}, true).indexOf('.bp-col-13{display:none')<0);
+    t.log('Unit','Entlass (final): Umschalter deaktiviert+angehakt',
+      buildColToggles({entlass:false}, false, 'x').indexOf('data-col-key="entlass" disabled checked')>=0);
+
+    // ── Zukünftige Aufnahmen + Stichtags-Rechnung ──
+    var futC={id:'fut1', aufnahmedatum:da(30), kostenzusage_bis:da(200), verlaengerung_status:'keine'};
+    t.assertEq('Unit','Zukunfts-Aufnahme → Status „Geplant"', computeStatus(futC, fix.today).code, S.GEPLANT);
+    t.log('Unit','Zukunfts-Aufnahme: behWochen null', behWochen(futC, fix.today)===null);
+    t.log('Unit','Aufnahme heute → nicht geplant', computeStatus({id:'h',aufnahmedatum:da(0)}, fix.today).code!==S.GEPLANT);
+    var nineA=[]; for(var gi=0;gi<9;gi++) nineA.push({id:'na'+gi,aufnahmedatum:da(-30),kostenzusage_bis:da(200),verlaengerung_status:'keine'});
+    t.assertEq('Unit','Kapazität: geplante Aufnahme zählt NICHT (=9)', getActiveCount(nineA.concat([futC]), fix.today), 9);
+    var asof40=(function(){var x=new Date(fix.today); x.setDate(x.getDate()+40); return sod(x);})();
+    t.assertEq('Unit','Stichtag +40: geplante Aufnahme nun aktiv (=10)', getActiveCount(nineA.concat([futC]), asof40), 10);
+    t.log('Unit','Stichtag +40: nicht mehr „Geplant"', computeStatus(futC, asof40).code!==S.GEPLANT);
+
+    // ── Ablehnungs-Flow: abgelehnt / Widerspruch / eigene Kosten ──
+    function vaBase(extra){return Object.assign({aufnahmedatum:da(-60),kostenzusage_traeger:'PKV',kostenzusage_bis:da(120)},extra||{});}
+    t.assertEq('Unit','Status: abgelehnt → „VA abgelehnt"', computeStatus(vaBase({verlaengerung_status:'abgelehnt'}), fix.today).code, S.VABG);
+    t.assertEq('Unit','Status: widerspruch → „Widerspruch"', computeStatus(vaBase({verlaengerung_status:'widerspruch'}), fix.today).code, S.VWID);
+    t.assertEq('Unit','Status: eigene_kosten → „Eigene Kosten"', computeStatus(vaBase({verlaengerung_status:'eigene_kosten'}), fix.today).code, S.VEK);
+    t.assertEq('Unit','Ablehnung + nahe Entlassung → VA abgelehnt (nicht ENT)',
+      computeStatus(vaBase({verlaengerung_status:'abgelehnt',kostenzusage_bis:da(10)}), fix.today).code, S.VABG);
+    t.log('Unit','SZ unterdrückt „VA abgelehnt"',
+      computeStatus(vaBase({kostenzusage_traeger:'SZ',verlaengerung_status:'abgelehnt'}), fix.today).code!==S.VABG);
+    t.log('Unit','Dropdown enthält neue VA-Status (Edit-Modal)',
+      ['abgelehnt','widerspruch','eigene_kosten'].every(function(k){return STATUS_META['verl_'+(k==='eigene_kosten'?'eigene_kosten':k)];}));
+    t.assertEq('Unit','Eigene Kosten: Detail-Notiz „ab DD.MM. SZ"', selbstzahlerNote('2026-08-14'), 'ab 15.08. SZ');
+    t.assertEq('Unit','Eigene Kosten: Jahreswechsel 31.12.→01.01.', selbstzahlerNote('2026-12-31'), 'ab 01.01. SZ');
+    t.log('Unit','Eigene Kosten: ohne Kostenzusage → „SZ"', selbstzahlerNote('')==='SZ');
+
+    // ════════════ REGRESSION: in dieser Session gefundene & behobene Fehler ════════════
+    var dd = function(off){ var x=new Date(fix.today); x.setDate(x.getDate()+off); return toISO(x); };
+
+    // [behWochen] Aktuelle (laufende) Behandlungswoche: Aufnahmetag = Woche 1, +7 Tage = Woche 2.
+    // Bug war: zeigte geplante Gesamtdauer (Aufnahme→vorl. Entlass) statt laufender Woche.
+    t.assertEq('Regression','behWochen: Aufnahme heute → Woche 1', behWochen({aufnahmedatum:dd(0)}, fix.today), 1);
+    t.assertEq('Regression','behWochen: Aufnahme -6 Tage → Woche 1', behWochen({aufnahmedatum:dd(-6)}, fix.today), 1);
+    t.assertEq('Regression','behWochen: Aufnahme -7 Tage → Woche 2', behWochen({aufnahmedatum:dd(-7)}, fix.today), 2);
+    t.assertEq('Regression','behWochen: Aufnahme -14 Tage → Woche 3', behWochen({aufnahmedatum:dd(-14)}, fix.today), 3);
+    t.assertEq('Regression','behWochen: vorl. Entlass irrelevant', behWochen({aufnahmedatum:dd(-6), kostenzusage_bis:dd(30)}, fix.today), 1);
+    t.assertEq('Regression','behWochen: kein Aufnahmedatum → null', behWochen({aufnahmedatum:null}, fix.today), null);
+
+    // [computeStatus] Ü-Gruppe schließt den Entlasstag SELBST ein (eD>=today, nicht eD>today).
+    // Bug war: Entlasstag=heute fiel weder auf entlassen noch in_ue_gruppe → zählte fälschlich mit.
+    var dToday = {aufnahmedatum:dd(-40), kostenzusage_bis:dd(1), verlaengerung_bis:dd(28),
+                  verlaengerung_status:'keine', entlassdatum:dd(0), kein_ue_gruppe:false};
+    t.assertEq('Regression','Entlasstag HEUTE → in_ue_gruppe (nicht VA stellen)', computeStatus(dToday, fix.today).code, 'in_ue_gruppe');
+    var dTomorrow = JSON.parse(JSON.stringify(dToday)); dTomorrow.entlassdatum=dd(1);
+    t.assertEq('Regression','Entlasstag morgen → in_ue_gruppe', computeStatus(dTomorrow, fix.today).code, 'in_ue_gruppe');
+    var dYesterday = JSON.parse(JSON.stringify(dToday)); dYesterday.entlassdatum=dd(-1);
+    t.assertEq('Regression','Entlasstag gestern → entlassen', computeStatus(dYesterday, fix.today).code, 'entlassen');
+
+    // [getActiveCount] Klient mit Entlasstag=heute zählt NICHT mehr ins Kontingent.
+    var nineAct = [];
+    for(var ri=0; ri<9; ri++) nineAct.push({id:'rg'+ri, aufnahmedatum:dd(-20), kostenzusage_bis:dd(60), verlaengerung_status:'keine'});
+    t.assertEq('Regression','getActiveCount: Entlasstag-heute ausgeschlossen (9, nicht 10)',
+               getActiveCount(nineAct.concat([dToday])), 9);
+
+    // [dateInRange] Datums-Plausibilität: nur aktuelles Jahr ±1 (Tippfehler wie '0002' ablehnen).
+    var ny = new Date().getFullYear();
+    t.assertEq('Regression','dateInRange: aktuelles Jahr gültig', dateInRange(ny+'-07-10'), true);
+    t.assertEq('Regression','dateInRange: Vorjahr gültig', dateInRange((ny-1)+'-01-01'), true);
+    t.assertEq('Regression','dateInRange: Folgejahr gültig', dateInRange((ny+1)+'-12-31'), true);
+    t.assertEq('Regression','dateInRange: Tippfehler 0002 abgelehnt', dateInRange('0002-07-10'), false);
+    t.assertEq('Regression','dateInRange: +2 Jahre abgelehnt', dateInRange((ny+2)+'-01-01'), false);
+    t.assertEq('Regression','dateInRange: leer → false', dateInRange(''), false);
+
+    // [Selbstzahler] SZ → keine VA-Status (VA stellen / beantragt / bewilligt); 'Entscheidung' bleibt.
+    var szB={aufnahmedatum:ddi(-60), kostenzusage_bis:ddi(120)};
+    t.assertEq('Regression','SZ + verl_bis → NICHT „VA stellen"',
+      computeStatus(Object.assign({},szB,{kostenzusage_traeger:'SZ',verlaengerung_bis:ddi(30),verlaengerung_status:'keine'})).code!==S.VZUB, true);
+    t.assertEq('Regression','SZ + genehmigt → NICHT „VA bewilligt"',
+      computeStatus(Object.assign({},szB,{kostenzusage_traeger:'SZ',verlaengerung_status:'genehmigt'})).code!==S.VGEH, true);
+    t.assertEq('Regression','SZ + beantragt → NICHT „VA beantragt"',
+      computeStatus(Object.assign({},szB,{kostenzusage_traeger:'SZ',verlaengerung_status:'beantragt'})).code!==S.VBEA, true);
+    t.assertEq('Regression','PKV + verl_bis → „VA stellen" (unverändert)',
+      computeStatus(Object.assign({},szB,{kostenzusage_traeger:'PKV',verlaengerung_bis:ddi(30),verlaengerung_status:'keine'})).code, S.VZUB);
+    t.assertEq('Regression','PKV + genehmigt → „VA bewilligt" (unverändert)',
+      computeStatus(Object.assign({},szB,{kostenzusage_traeger:'PKV',verlaengerung_status:'genehmigt'})).code, S.VGEH);
+  },
+
+  // ──────────────────────── INTEGRATION ────────────────────────
+  runIntegration: function(fix){
+    var t = this;
+
+    // Frische Fixture-State installieren
+    state = JSON.parse(JSON.stringify(fix.state));
+    renderTable(state);
+
+    // ── Test: echter Klick auf VZUB-Badge "VA stellen" ──
+    // (testet Event-Delegation + applyPatch + Status-Transition)
+    state = JSON.parse(JSON.stringify(fix.state));
+    state.clients.find(function(c){return c.id==='fx_vzub';}).updatedAt = undefined;
+    renderTable(state);
+    var badge = ROOT.querySelector('[data-bp-action="set-beantragt"][data-bp-id="fx_vzub"]');
+    t.log('Integration','set-beantragt: Badge in DOM auffindbar', !!badge);
+    if(badge){
+      var beforeCalls = SELFTEST.recorders.saveCalls;
+      badge.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true}));
+      var after = state.clients.find(function(c){return c.id==='fx_vzub';});
+      t.assertEq('Integration','Klick: verlaengerung_status → beantragt', after.verlaengerung_status, 'beantragt');
+      t.assertEq('Integration','Klick: saveState wurde aufgerufen', SELFTEST.recorders.saveCalls, beforeCalls+1);
+      // Status nach dem Klick
+      t.assertEq('Integration','Status nach Klick: verl_beantragt', computeStatus(after, fix.today).code, 'verl_beantragt');
+    }
+
+    // ── Test: Einstellungsdialog — Therapeuten-Felder vorbelegt + Speichern ──
+    state = JSON.parse(JSON.stringify(fix.state));
+    var _ibakPV=paramThVerbalList.slice();
+    paramThVerbalList=['Anna','Bert'];
+    delete state.config.thVerbal; delete state.config.thNonverbal;
+    openSettingsModal();
+    var thvIn=document.getElementById('bp-s-thv');
+    t.log('Integration','Einstellungen: Feld Therapeuten verbal vorhanden', !!thvIn);
+    if(thvIn){
+      t.assertEq('Integration','Einstellungen: vorbelegt aus Macro-Parameter (kommasepariert)',
+                 thvIn.value, 'Anna, Bert');
+      t.log('Integration','Einstellungen: einzeiliges Textfeld (kein Textarea)',
+            thvIn.tagName==='INPUT' && thvIn.type==='text');
+      thvIn.value='Anna, Bert, Carla';
+      handleSaveSettings();
+      t.assertEq('Integration','Einstellungen: Speichern schreibt config.thVerbal',
+                 (state.config.thVerbal||[]).join(','), 'Anna,Bert,Carla');
+      t.assertEq('Integration','Einstellungen: Settings gewinnen nach dem Speichern',
+                 getThVerbalList().join(','), 'Anna,Bert,Carla');
+    }
+    closeModal();
+    paramThVerbalList=_ibakPV;
+    renderTable(state);
+
+    // ── Test: Versand-Dialog — Permalink im Nachrichtentext ──
+    state = JSON.parse(JSON.stringify(fix.state));
+    state.mailTemplate = {};
+    openVersandModal();
+    var vBody=document.getElementById('bp-v-body');
+    t.log('Integration','Versand: Nachrichtenfeld vorhanden', !!vBody);
+    if(vBody) t.log('Integration','Versand: Permalink im Default-Text',
+                    vBody.value.indexOf(getPermaLink())>=0);
+    t.log('Integration','Versand: Permalink als klickbarer Hinweis im Dialog',
+          !!MODAL_EL.querySelector('a.bp-perma-link'));
+    t.log('Integration','Versand: keine Schritt-Anleitung mehr im Dialog',
+          !MODAL_EL.querySelector('.bp-versand-steps'));
+    t.log('Integration','Versand: kein PDF-drucken-Button mehr',
+          !MODAL_EL.querySelector('[data-bp-action="versand-print"]'));
+    t.log('Integration','Drucken bleibt in der Titelzeile erreichbar',
+          !!ROOT.querySelector('[data-bp-action="print"]'));
+    closeModal();
+
+    // Gespeicherte Vorlage ohne Link wird einmalig ergänzt
+    state.mailTemplate = {to:'x@y.de', subject:'Alt', body:'Hallo,\n\nanbei.\n\nBeste Grüße'};
+    openVersandModal();
+    var vBody2=document.getElementById('bp-v-body');
+    if(vBody2){
+      t.log('Integration','Versand: alte Vorlage um Permalink ergänzt',
+            vBody2.value.indexOf(getPermaLink())>=0);
+      t.log('Integration','Versand: eigener Vorlagentext bleibt erhalten',
+            vBody2.value.indexOf('anbei.')>=0 && vBody2.value.indexOf('Beste Grüße')>=0);
+    }
+    closeModal();
+
+    // Alte Vorlage mit Anker: Anker wird entfernt, kein zweiter Block
+    state.mailTemplate = {to:'x@y.de', body:'Hallo.\n\n'+LINK_LABEL+'\n'+getLongLink()+linkAnchor()+'\n\nBeste Grüße'};
+    openVersandModal();
+    var vBody3=document.getElementById('bp-v-body');
+    if(vBody3){
+      t.log('Integration','Versand: alter Anker aus Vorlage entfernt',
+            vBody3.value.indexOf(linkAnchor())<0);
+      t.log('Integration','Versand: kein zweiter Link-Block',
+            vBody3.value.split(LINK_LABEL).length===2);
+    }
+    closeModal();
+    state.mailTemplate = {};
+    renderTable(state);
+
+    // ── Test: Kurzlink-Auswertung der REST-Antwort (ohne echten Call) ──
+    var _bakTiny=tinyLink, _bakFetch=window.fetch;
+    tinyLink='';
+    var _longBefore=getPermaLink();
+    window.fetch=function(){ return Promise.resolve({ok:true, json:function(){
+      return Promise.resolve({_links:{base:'http://intranet.example/c', tinyui:'/x/44RIAg'}});
+    }}); };
+    var _asyncDone=false;
+    fetchTinyLink().then(function(){
+      _asyncDone=true;
+      t.log('Integration','Kurzlink: aus _links.base + _links.tinyui gebaut',
+            tinyLink==='http://intranet.example/c/x/44RIAg');
+      t.log('Integration','Kurzlink: getPermaLink nutzt ihn ohne Anker',
+            getPermaLink()==='http://intranet.example/c/x/44RIAg');
+      t.log('Integration','Kurzlink: lange Form bleibt als Variante erkannt',
+            bodyHasLink('alt: '+_longBefore));
+      window.fetch=_bakFetch; tinyLink=_bakTiny;
+    });
+    t.log('Integration','Kurzlink: Abruf blockiert die UI nicht', _asyncDone===false);
+
+    // ── Test: applyPatch ändert Feld + Re-Render produziert DOM ──
+    state = JSON.parse(JSON.stringify(fix.state));
+    renderTable(state);
+    var beforeName = state.clients[0].name;
+    applyPatch('fx_stab', {name:'Geänderter Name'});
+    t.assertEq('Integration','applyPatch: Name geändert', state.clients[0].name, 'Geänderter Name');
+    t.assertEq('Integration','applyPatch: nicht der originale Name', state.clients[0].name===beforeName, false);
+    var rowAfter = ROOT.querySelector('tr[data-bp-row-id="fx_stab"]');
+    t.log('Integration','applyPatch: Zeile rendert nach Patch', !!rowAfter);
+
+    // ── Test: Aufnahme — neuer Klient in state.clients ──
+    state = JSON.parse(JSON.stringify(fix.state));
+    renderTable(state);
+    var origCount = state.clients.length;
+    state.clients.push({id:'fx_added', name:'Fx Hinzugefügt', aufnahmedatum:fix.state.clients[0].aufnahmedatum,
+                        kostenzusage_traeger:'PKV', kostenzusage_traeger_detail:'',
+                        kostenzusage_bis:'', verlaengerung_bis:'', verlaengerung_status:'keine',
+                        vorl_entlassdatum:'', entlassdatum:'', kein_ue_gruppe:false, goae:false,
+                        bt_verbal:'', bt_nonverbal:''});
+    renderTable(state);
+    t.assertEq('Integration','Aufnahme: clients.length +1', state.clients.length, origCount+1);
+    var rowAdded = ROOT.querySelector('tr[data-bp-row-id="fx_added"]');
+    t.log('Integration','Aufnahme: neue Zeile im DOM', !!rowAdded);
+
+    // ── Test: set-bewilligt — VBEA → VGEH Transition ──
+    // Manueller Action-Pfad (keine 'set-bewilligt'-Buttons in dieser Variante,
+    // aber der Workflow ist in handleSetBewilligt / applyPatch identisch)
+    state = JSON.parse(JSON.stringify(fix.state));
+    renderTable(state);
+    var vbeaCl = state.clients.find(function(c){return c.id==='fx_vbea';});
+    var origVerlBis = vbeaCl.verlaengerung_bis;
+    applyPatch('fx_vbea', {
+      kostenzusage_bis: vbeaCl.verlaengerung_bis,
+      verlaengerung_bis: null,
+      verlaengerung_status: 'genehmigt'
+    });
+    var vbeaAfter = state.clients.find(function(c){return c.id==='fx_vbea';});
+    t.assertEq('Integration','set-bewilligt: kz_bis = ehemals verl_bis', vbeaAfter.kostenzusage_bis, origVerlBis);
+    t.assertEq('Integration','set-bewilligt: verl_bis null', vbeaAfter.verlaengerung_bis, null);
+    t.assertEq('Integration','set-bewilligt: status genehmigt', vbeaAfter.verlaengerung_status, 'genehmigt');
+    t.assertEq('Integration','set-bewilligt: Status nach Transition → VGEH',
+               computeStatus(vbeaAfter, fix.today).code, 'verl_genehmigt');
+
+    // ── Test: DOM-Konsistenz — thead bp-col-N matcht tbody bp-col-N ──
+    state = JSON.parse(JSON.stringify(fix.state));
+    renderTable(state);
+    var theadThs = ROOT.querySelectorAll('.bp-table thead tr:not(.bp-titlebar-row) th');
+    var firstTbodyTds = ROOT.querySelectorAll('.bp-table tbody tr:first-child td');
+    var indexMismatch = null;
+    function colN(el){
+      var m=(el.className||'').match(/bp-col-(\d+)/);
+      return m?m[1]:null;
+    }
+    if(theadThs.length===firstTbodyTds.length){
+      for(var i=0;i<theadThs.length;i++){
+        var h=colN(theadThs[i]); var d=colN(firstTbodyTds[i]);
+        if(h!==d){indexMismatch='Position '+i+': th='+h+' vs td='+d;break;}
+      }
+    }else{
+      indexMismatch='Anzahl Spalten verschieden: thead='+theadThs.length+', tbody='+firstTbodyTds.length;
+    }
+    t.log('Integration','Spalten-Mapping thead bp-col-N = tbody bp-col-N',
+          indexMismatch===null, indexMismatch||'');
+
+    // ── Test: Titelzeile vorhanden + rotes Hintergrund (CSS-Specificity) ──
+    var titlebar = ROOT.querySelector('tr.bp-titlebar-row th');
+    t.log('Integration','Titelzeile im DOM', !!titlebar);
+    if(titlebar){
+      var bg = window.getComputedStyle(titlebar).backgroundColor;
+      // rgb(151, 19, 33) erwartet
+      var isRed = bg==='rgb(151, 19, 33)' || /151,\s*19,\s*33/.test(bg);
+      t.log('Integration','Titelzeile: rotes Brand-Hintergrund (CSS-Override greift)',
+            isRed, bg);
+    }
+
+    // ── Test: Logo embedded — Data-URI vorhanden, kein externer Fetch ──
+    var logo = ROOT.querySelector('.bp-titlebar-logo');
+    t.log('Integration','Logo im DOM', !!logo);
+    if(logo){
+      var src = logo.getAttribute('src')||'';
+      t.log('Integration','Logo: data:image/svg+xml (eingebettet, kein externer Fetch)',
+            src.indexOf('data:image/svg+xml')===0);
+    }
+
+    // ── Test: Entscheidungsgrenze ändern verschiebt Status ──
+    state = JSON.parse(JSON.stringify(fix.state));
+    var fxEntCl = state.clients.find(function(c){return c.id==='fx_ent';});
+    // fx_ent: tb=10. Mit Grenze 17 → ENT.
+    t.assertEq('Integration','Vor Grenzen-Änderung: ENT', computeStatus(fxEntCl, fix.today).code, 'entscheidung_faellig');
+    // Grenze auf 5 absenken → tb=10 nicht mehr < 5 → STABIL
+    state.config.entscheidungsGrenze = 5;
+    t.assertEq('Integration','Grenze 5: fx_ent nicht mehr ENT', computeStatus(fxEntCl, fix.today).code, 'stabil');
+    // Zurück
+    state.config.entscheidungsGrenze = 17;
+
+    // ════════════ REGRESSION (DOM): in dieser Session behobene UI-Fehler ════════════
+    var ddi = function(off){ var x=new Date(fix.today); x.setDate(x.getDate()+off); return toISO(x); };
+
+    // [Aufnahme-Modal] kein "NaN", balancierte Divs, Footer-Button vorhanden.
+    // Bug war: verirrtes unäres + (field(...) + +'<div…') → NaN-Label + kaputte Div-Schachtelung.
+    state = JSON.parse(JSON.stringify(fix.state));
+    openAufnahmeModal();
+    var amHtml = MODAL_EL.innerHTML;
+    t.log('Regression','Aufnahme-Modal: kein "NaN" im HTML', amHtml.indexOf('NaN')<0);
+    t.log('Regression','Aufnahme-Modal: Label "Aufnahmedatum" vorhanden', amHtml.indexOf('>Aufnahmedatum ')>=0);
+    var amO=(amHtml.split('<div').length-1), amC=(amHtml.split('</div>').length-1);
+    t.log('Regression','Aufnahme-Modal: Divs balanciert ('+amO+'/'+amC+')', amO===amC);
+    t.log('Regression','Aufnahme-Modal: Footer-Button save-aufnahme vorhanden', amHtml.indexOf('save-aufnahme')>=0);
+    closeModal();
+
+    // [Inline-Edit Datum] native date-Inputs feuern 'change' (nicht zuverlässig 'blur');
+    // Bug war: Status + Ü-Gruppe wurden nach Datumsauswahl nicht neu berechnet.
+    state = JSON.parse(JSON.stringify(fix.state));
+    var ieId='ie_verl';
+    state.clients=[{id:ieId, name:'Inline', aufnahmedatum:ddi(-60), kostenzusage_traeger:'PKV',
+      kostenzusage_detail:'', kostenzusage_bis:ddi(10), verlaengerung_bis:'', verlaengerung_status:'keine',
+      entlassdatum:'', kein_ue_gruppe:false, goae:false, bt_verbal:'', bt_nonverbal:''}];
+    renderTable(state);
+    var beforeCode = computeStatus(state.clients[0], fix.today).code;
+    var verlCell = ROOT.querySelector('td[data-bp-field="verlaengerung_bis"][data-bp-id="'+ieId+'"]');
+    t.log('Regression','Inline-Edit: verl_bis-Zelle im DOM', !!verlCell);
+    if(verlCell){
+      verlCell.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+      var inp = ROOT.querySelector('input.bp-inline-input');
+      t.log('Regression','Inline-Edit: date-Input erzeugt', !!inp && inp.type==='date');
+      if(inp){
+        inp.value = ddi(90);
+        inp.dispatchEvent(new Event('change',{bubbles:true}));   // native Datumsauswahl
+        var after = state.clients.find(function(x){return x.id===ieId;});
+        t.assertEq('Regression','Inline-Edit change: verl_bis übernommen', after.verlaengerung_bis, ddi(90));
+        t.assertEq('Regression','Inline-Edit change: Status neu berechnet → VZUB',
+                   computeStatus(after, fix.today).code, 'verl_zu_beantragen');
+        t.assertEq('Regression','Inline-Edit change: Status hat sich geändert',
+                   computeStatus(after, fix.today).code !== beforeCode, true);
+        t.assertEq('Regression','Inline-Edit change: Ü-Gruppe-Datum = verl_bis-6',
+                   toISO(ueGruppe(after)), ddi(84));
+      }
+    }
+
+    // [Quick-Verlängerung] Banner-Schnellaktion trägt nur das Datum ein → Status "VA stellen"
+    // (verl_zu_beantragen), NICHT "VA beantragt". Der Antrag erfolgt erst per Badge-Klick.
+    state = JSON.parse(JSON.stringify(fix.state));
+    var qvId='qv_reg';
+    state.clients=[{id:qvId, name:'QuickVerl', aufnahmedatum:ddi(-40), kostenzusage_traeger:'PKV',
+      kostenzusage_detail:'', kostenzusage_bis:ddi(10), verlaengerung_bis:'', verlaengerung_status:'keine',
+      entlassdatum:'', kein_ue_gruppe:false, goae:false, bt_verbal:'', bt_nonverbal:''}];
+    renderTable(state); renderBanner(state);
+    t.assertEq('Regression','Quick-Verl: Ausgangsstatus entscheidung_faellig',
+               computeStatus(state.clients[0], fix.today).code, 'entscheidung_faellig');
+    openQuickVerlaengernModal(qvId);
+    var qvInp=document.getElementById('bp-qv-d');
+    t.log('Regression','Quick-Verl: Datumsfeld im Modal', !!qvInp);
+    if(qvInp){
+      qvInp.value=ddi(60);
+      handleQuickVerlaengern(qvId);
+      var qvAfter=state.clients.find(function(x){return x.id===qvId;});
+      t.assertEq('Regression','Quick-Verl: Status → VA stellen (zu_beantragen)', qvAfter.verlaengerung_status, 'zu_beantragen');
+      t.assertEq('Regression','Quick-Verl: NICHT beantragt', qvAfter.verlaengerung_status!=='beantragt', true);
+      t.assertEq('Regression','Quick-Verl: computeStatus → verl_zu_beantragen',
+                 computeStatus(qvAfter, fix.today).code, 'verl_zu_beantragen');
+      t.assertEq('Regression','Quick-Verl: Datum übernommen', qvAfter.verlaengerung_bis, ddi(60));
+    }
+    closeModal();
+
+    // [Inline-Edit Plausibilität] Tippfehler-Jahr (0002) wird im in-place editing verworfen,
+    // Feld bleibt unverändert. (Regression: '0002-07-10' kam genau über das Inline-Editing rein.)
+    state = JSON.parse(JSON.stringify(fix.state));
+    var drId='dr_inl';
+    state.clients=[{id:drId, name:'Plausib', aufnahmedatum:ddi(-10), kostenzusage_traeger:'PKV',
+      kostenzusage_detail:'', kostenzusage_bis:'', verlaengerung_bis:'', verlaengerung_status:'keine',
+      entlassdatum:'', kein_ue_gruppe:false, goae:false, bt_verbal:'', bt_nonverbal:''}];
+    renderTable(state);
+    var edCell = ROOT.querySelector('td[data-bp-field="entlassdatum"][data-bp-id="'+drId+'"]');
+    t.log('Regression','Inline-Plausib.: entlass-Zelle im DOM', !!edCell);
+    if(edCell){
+      edCell.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+      var dInp = ROOT.querySelector('input.bp-inline-input');
+      if(dInp){
+        t.assertEq('Regression','Inline-Plausib.: min-Attribut gesetzt', dInp.min, dateMin());
+        t.assertEq('Regression','Inline-Plausib.: max-Attribut gesetzt', dInp.max, dateMax());
+        dInp.value = '0002-07-10';                       // Tippfehler-Jahr
+        dInp.dispatchEvent(new Event('change',{bubbles:true}));
+        var drAfter = state.clients.find(function(x){return x.id===drId;});
+        t.assertEq('Regression','Inline-Plausib.: 0002-Jahr NICHT gespeichert', drAfter.entlassdatum, '');
+      }
+    }
+
+    // [Wartung] Umschalter für entlassene (ausgeblendete) Klient:innen — Fixture enthält fx_entl.
+    state = JSON.parse(JSON.stringify(fix.state));
+    showEntlassen = false;
+    renderTable(state);
+    t.log('Regression','Wartung: Toggle „entlassen anzeigen" sichtbar', TABLE_EL.innerHTML.indexOf('toggle-entlassen')>=0);
+    var entlRow = ROOT.querySelector('tr.bp-row-entlassen');
+    t.log('Regression','Wartung: entlassene Zeile im DOM (CSS-versteckt)', !!entlRow);
+    t.log('Regression','Wartung: entlassene Zeile hat Bearbeiten-Button',
+          !!(entlRow && entlRow.querySelector('[data-bp-action="edit"]')));
+    var tgl = ROOT.querySelector('[data-bp-action="toggle-entlassen"]');
+    if(tgl){
+      tgl.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+      t.log('Regression','Wartung: ROOT erhält bp-show-entlassen nach Klick', ROOT.classList.contains('bp-show-entlassen'));
+    }
+    showEntlassen = false; renderTable(state);   // sauberen Zustand wiederherstellen
+
+    // [Inline-Datum robust] Kalender-Öffnen (blur) bricht das Editing NICHT ab;
+    // gültiges Datum via 'change' committet.
+    state = JSON.parse(JSON.stringify(fix.state));
+    var diId='di_robust';
+    state.clients=[{id:diId, name:'DI', aufnahmedatum:ddi(-30), kostenzusage_traeger:'PKV',
+      kostenzusage_detail:'', kostenzusage_bis:'', verlaengerung_bis:ddi(20), verlaengerung_status:'keine',
+      entlassdatum:'', kein_ue_gruppe:false, goae:false, bt_verbal:'', bt_nonverbal:''}];
+    renderTable(state);
+    var vbCell = ROOT.querySelector('td[data-bp-field="verlaengerung_bis"][data-bp-id="'+diId+'"]');
+    if(vbCell){
+      vbCell.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+      var di = ROOT.querySelector('input.bp-inline-input');
+      if(di){
+        di.dispatchEvent(new Event('blur',{bubbles:true}));
+        t.log('Regression','Inline-Datum: blur (Kalender) schließt Editing NICHT', !!ROOT.querySelector('input.bp-inline-input'));
+        di.value = ddi(40);
+        di.dispatchEvent(new Event('change',{bubbles:true}));
+        var diAfter = state.clients.find(function(x){return x.id===diId;});
+        t.assertEq('Regression','Inline-Datum: gültiges Datum via change committet', diAfter.verlaengerung_bis, ddi(40));
+      }
+    }
+
+    // [VA-Reset] Neues Verlängerungsdatum bei Status 'bewilligt' → zurück auf 'VA stellen'.
+    state = JSON.parse(JSON.stringify(fix.state));
+    var vrId='va_reset';
+    state.clients=[{id:vrId, name:'VAReset', aufnahmedatum:ddi(-60), kostenzusage_traeger:'PKV',
+      kostenzusage_detail:'', kostenzusage_bis:'', verlaengerung_bis:ddi(5), verlaengerung_status:'genehmigt',
+      entlassdatum:'', kein_ue_gruppe:false, goae:false, bt_verbal:'', bt_nonverbal:''}];
+    renderTable(state);
+    var vrCell = ROOT.querySelector('td[data-bp-field="verlaengerung_bis"][data-bp-id="'+vrId+'"]');
+    if(vrCell){
+      vrCell.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+      var vrInp = ROOT.querySelector('input.bp-inline-input');
+      if(vrInp){
+        vrInp.value = ddi(45);
+        vrInp.dispatchEvent(new Event('change',{bubbles:true}));
+        var vrAfter = state.clients.find(function(x){return x.id===vrId;});
+        t.assertEq('Regression','VA-Reset: bewilligt + neues Datum → zu_beantragen', vrAfter.verlaengerung_status, 'zu_beantragen');
+        t.assertEq('Regression','VA-Reset: Status-Badge wird „VA stellen"', computeStatus(vrAfter, fix.today).code, S.VZUB);
+      }
+    }
+  },
+
+  // ────────────────────── VELOCITY-RENDER-SMOKE ──────────────────────
+  // Prüft: keine Velocity-Direktiven-Korruption in der finalen CSS
+  runVelocitySmoke: function(){
+    var t = this;
+    // 1. Logo wurde nicht weg-ge-velocity'd
+    var logo = ROOT.querySelector('.bp-titlebar-logo');
+    t.log('Velocity','Logo gerendert (Macro-Body intakt)', !!logo);
+
+    // 2. CSS enthält Footer-Hide Selektoren (${H} → # nach Velocity)
+    var styleEls = ROOT.querySelectorAll('style');
+    var allCss = '';
+    for(var i=0;i<styleEls.length;i++) allCss += styleEls[i].textContent;
+    t.log('Velocity','CSS enthält ${H}footer-Regel (Velocity-Escape funktioniert)',
+          allCss.indexOf('${H}footer')!==-1);
+    t.log('Velocity','CSS enthält ${H}poweredby-Regel',
+          allCss.indexOf('${H}poweredby')!==-1);
+    t.log('Velocity','CSS enthält ${H}comments-section-Regel (Kommentare im Druck aus)',
+          allCss.indexOf('${H}comments-section')!==-1);
+
+    // 3. Keine Footer-HTML-Korruption (Confluence-Macro ausversehen ausgelöst?)
+    var corruption = allCss.indexOf('<ul id="poweredby">')!==-1 ||
+                     allCss.indexOf('Atlassian Confluence')!==-1;
+    t.log('Velocity','CSS frei von Footer-HTML-Injektion', !corruption,
+          corruption?'Footer-HTML in CSS gefunden (Velocity-Bug!)':'');
+
+    // 4. Titlebar-Override-Selektor ist im CSS
+    t.log('Velocity','CSS enthält .bp-table thead tr.bp-titlebar-row th (Specificity-Fix)',
+          allCss.indexOf('thead tr.bp-titlebar-row th')!==-1);
+  },
+
+  // ────────────────────────── SICHERHEIT ──────────────────────────
+  runSafety: function(origStateJson){
+    var t = this;
+    // 1. Echte saveState-Aufrufe = 0 (alle in Sandbox abgefangen)
+    t.log('Sicherheit','Echtes saveState: 0 Aufrufe ('+SELFTEST.recorders.saveCalls+' an Recorder)',
+          true, SELFTEST.recorders.saveCalls + ' Recorder-Aufrufe — kein echter REST-Call');
+    // 2. Modell unverändert (JSON-Vergleich vor/nach)
+    var currentJson = JSON.stringify(state);
+    t.log('Sicherheit','Echtes Modell unverändert', currentJson===origStateJson,
+          currentJson===origStateJson ? '' : 'state hat sich geändert!');
+  },
+
+  // ───────────────────────── MAIN ENTRY ─────────────────────────
+  run: function(){
+    this.results = [];
+    var fix;
+    try{ fix = this.buildFixture(); }
+    catch(e){ this.log('Fehler','Fixture-Aufbau: '+e.message, false); this.render(); return; }
+
+    var origJson;
+    try{
+      this.startSandbox(fix);
+      try{ this.runUnit(fix); }
+      catch(e){ this.log('Fehler','Unit-Tests abgebrochen: '+e.message, false); }
+      try{ this.runIntegration(fix); }
+      catch(e){ this.log('Fehler','Integration-Tests abgebrochen: '+e.message, false); }
+    }finally{
+      origJson = this.endSandbox();
+    }
+    if(origJson) this.runSafety(origJson);
+    this.runVelocitySmoke();
+
+    this.render();
+  },
+
+  render: function(){
+    var el = document.getElementById('bp-selftest-result-'+instId);
+    if(!el) return;
+    if(!this.results.length){ el.innerHTML='<p style="color:#5e6c84">Keine Ergebnisse.</p>'; return; }
+    var groups = {};
+    this.results.forEach(function(r){ (groups[r.g]=groups[r.g]||[]).push(r); });
+    var order = ['Unit','Status','Integration','Regression','Sicherheit','Velocity','Fehler'];
+    var html = '';
+    var totalOk=0, totalFail=0;
+    this.results.forEach(function(r){ r.ok?totalOk++:totalFail++; });
+    html += '<div style="padding:8px 12px;margin-bottom:10px;border-radius:4px;font-weight:600;'+
+            (totalFail===0?'background:#e3fcef;color:#006644':'background:#ffebe6;color:#bf2600')+'">'+
+            (totalFail===0?'\u2713 ':'\u2717 ')+'Selbsttest: '+totalOk+'/'+(totalOk+totalFail)+
+            (totalFail?' ('+totalFail+' rot)':' grün')+'</div>';
+    order.forEach(function(g){
+      var items = groups[g]; if(!items) return;
+      var fail = items.filter(function(r){return !r.ok;}).length;
+      html += '<h5 style="margin:12px 0 4px;font-size:13px;color:'+(fail===0?'#006644':'#bf2600')+'">'+
+              g+' — '+(items.length-fail)+'/'+items.length+'</h5>';
+      html += '<ul style="list-style:none;padding:0;margin:0;font-size:11.5px">';
+      items.forEach(function(r){
+        var bg = r.ok?'#f0fbf5':'#ffebe6';
+        var fg = r.ok?'#006644':'#bf2600';
+        html += '<li style="padding:3px 9px;border-radius:3px;background:'+bg+';color:'+fg+
+                ';margin-bottom:1px">'+(r.ok?'\u2713':'\u2717')+' '+h(r.n);
+        if(r.d) html += '<span style="opacity:.75"> — '+h(r.d)+'</span>';
+        html += '</li>';
+      });
+      html += '</ul>';
+    });
+    el.innerHTML = html;
+  }
+};
+
+// ── SETTINGS ────────────────────────────────────────────────────────
+// thSrcHint: erklaert, woher die aktuell angezeigte Liste stammt.
+function thSrcHint(cfgKey, paramList){
+  if(thSource(cfgKey)==='settings')
+    return 'Quelle: <strong>Einstellungen</strong> (hat Vorrang vor dem Macro-Parameter).';
+  if(paramList.length)
+    return 'Quelle: <strong>Macro-Parameter</strong> (veraltet) &mdash; hier vorbelegt. '+
+           'Nach dem Speichern gilt die Einstellung und hat Vorrang.';
+  return 'Noch nicht gepflegt. Leer lassen &rarr; Freitext statt Auswahlliste.';
+}
+
+function openSettingsModal(){
+  var grenze=getEntscheidungsGrenze();
+  var thvVal =getThVerbalList().join(', ');
+  var thnvVal=getThNvList().join(', ');
+  MODAL_EL.innerHTML=
+    '<div class="bp-overlay" data-bp-action="close-modal">'+
+    '<div class="bp-modal" role="dialog" aria-modal="true">'+
+    '<div class="bp-modal-header"><span class="bp-modal-title">&#9881; Einstellungen</span>'+
+    '<button class="bp-modal-close" data-bp-action="close-modal">&times;</button></div>'+
+    '<div class="bp-modal-body">'+
+    '<div class="bp-field">'+
+    '<label for="bp-s-grenze">Entscheidungsgrenze (Tage) <span class="bp-req">*</span></label>'+
+    '<input type="number" id="bp-s-grenze" class="bp-input" min="1" max="365" value="'+grenze+'">'+
+    '<div class="bp-hint">Ab wie vielen Tagen vor dem vorl. Entlassdatum soll das <strong>Entscheidung</strong>-Badge erscheinen? Standard: 17 Tage.</div>'+
+    '</div>'+
+    '<div class="bp-field">'+
+    '<label for="bp-s-thv">Bezugstherapeut:innen &mdash; verbal</label>'+
+    '<input type="text" id="bp-s-thv" class="bp-input" '+
+      'placeholder="Namen mit Komma trennen, z.B. Anna Meier, Bert Klein" value="'+h(thvVal)+'">'+
+    '<div class="bp-hint">'+thSrcHint('thVerbal', paramThVerbalList)+'</div>'+
+    '</div>'+
+    '<div class="bp-field">'+
+    '<label for="bp-s-thnv">Bezugstherapeut:innen &mdash; non-verbal</label>'+
+    '<input type="text" id="bp-s-thnv" class="bp-input" '+
+      'placeholder="Namen mit Komma trennen, z.B. Cara Roth" value="'+h(thnvVal)+'">'+
+    '<div class="bp-hint">'+thSrcHint('thNonverbal', paramThNvList)+'</div>'+
+    '</div>'+
+    '<div class="bp-hint" style="margin:-4px 0 12px">Gepflegte Listen erscheinen als Auswahlfeld in Aufnahme, Bearbeiten und in der Tabelle. '+
+    'Bereits zugeordnete Namen bleiben erhalten, auch wenn sie nicht mehr in der Liste stehen.</div>'+
+    '<div class="bp-field"><label>Sichtbare Spalten (Anzeige)</label>'+
+    '<div style="display:flex;flex-wrap:wrap">'+buildColToggles(state.viewCols, false, 'bp-view-col-cb')+'</div>'+
+    '<div class="bp-hint">Status und Name sind immer sichtbar. Wirkt nur auf die Bildschirm-Anzeige (Druck separat im Druckdialog).</div></div>'+
+    '</div>'+
+    '<div class="bp-modal-footer">'+
+    '<button class="bp-btn" data-bp-action="close-modal">Abbrechen</button>'+
+    '<div style="flex:1"></div>'+
+    '<button class="bp-btn bp-btn-primary" data-bp-action="save-settings">Speichern</button>'+
+    '</div></div></div>';
+  bindEsc();
+  var el=document.getElementById('bp-s-grenze');
+  if(el){el.focus();el.select();}
+}
+
+function handleSaveSettings(){
+  var v=parseInt(document.getElementById('bp-s-grenze').value,10);
+  if(isNaN(v)||v<1||v>365){
+    showErr({'bp-s-grenze':'Bitte eine Zahl zwischen 1 und 365 eingeben'});return;
+  }
+  state.config=state.config||{};
+  var bakG=state.config.entscheidungsGrenze;
+  var bakV=state.viewCols;
+  var hadThV=('thVerbal'    in state.config), bakThV =state.config.thVerbal;
+  var hadThNV=('thNonverbal' in state.config), bakThNV=state.config.thNonverbal;
+  state.config.entscheidungsGrenze=v;
+  // Bezugstherapeuten: ab jetzt Einstellung (hat Vorrang vor Macro-Parameter).
+  var thvEl =document.getElementById('bp-s-thv');
+  var thnvEl=document.getElementById('bp-s-thnv');
+  if(thvEl)  state.config.thVerbal    = parseThList(thvEl.value);
+  if(thnvEl) state.config.thNonverbal = parseThList(thnvEl.value);
+  state.viewCols=readColToggles('bp-view-col-cb');
+  closeModal();
+  renderTable(state);renderBanner(state);
+  applyViewCSS();
+  saveState(state, {replay: replaySetTop({config: state.config, viewCols: state.viewCols})}).then(function(){setStatus('Einstellungen gespeichert.');}).catch(function(e){
+    state.config.entscheidungsGrenze=bakG;state.viewCols=bakV;
+    if(hadThV)  state.config.thVerbal=bakThV;     else delete state.config.thVerbal;
+    if(hadThNV) state.config.thNonverbal=bakThNV; else delete state.config.thNonverbal;
+    renderTable(state);renderBanner(state);applyViewCSS();
+    setStatus('Fehler: '+e.message,true);
+  });
+}
+// ── INLINE-EDIT ─────────────────────────────────────────────────────
+function handleInlineEdit(td, clientId, field, type) {
+  if (!canEdit) return;
+  var client = state.clients.find(function(x){return x.id===clientId;});
+  if (!client) return;
+
+  var currentVal = client[field] || '';
+  var input = document.createElement('input');
+  input.className = 'bp-inline-input';
+
+  if (type === 'date') {
+    input.type = 'date';
+    input.value = currentVal;
+    input.min = dateMin(); input.max = dateMax();
+    wireFlexDate(input);
+    td.innerHTML = '';
+    td.appendChild(input);
+    input.focus();
+
+    var dsaved = false;
+    function cleanupDate(){ document.removeEventListener('mousedown', outsideDate, true); }
+    function commitDate(force){
+      if (dsaved) return;
+      var newVal = input.value.trim() || null;
+      // Beim Tippen des Jahres entstehen Zwischenstände wie '0002-..' (out of range).
+      // Diese NICHT verwerfen — sonst bricht die Eingabe nach der ersten Ziffer ab.
+      // Editing offen lassen, bis ein gültiges Datum getippt/gewählt wurde.
+      if (newVal && !dateInRange(newVal)) {
+        if (force) { dsaved = true; cleanupDate(); renderTable(state); setStatus(dateRangeMsg(), true); }
+        return;
+      }
+      dsaved = true; cleanupDate();
+      if (newVal === (currentVal || null)) { renderTable(state); return; }
+      var backup = client[field];
+      var statusBackup = client.verlaengerung_status;
+      client[field] = newVal;
+      client.updatedAt = new Date().toISOString();
+      var _patch = {}; _patch[field] = newVal;
+      // Neues Verlängerungsdatum ⇒ ein neuer VA ist fällig: ein bereits bewilligter
+      // oder beantragter Status wird auf 'zu_beantragen' (VA stellen) zurückgesetzt.
+      if (field === 'verlaengerung_bis' && newVal &&
+          (client.verlaengerung_status === 'genehmigt' || client.verlaengerung_status === 'beantragt' ||
+           client.verlaengerung_status === 'abgelehnt' || client.verlaengerung_status === 'widerspruch')) {
+        client.verlaengerung_status = 'zu_beantragen';
+        _patch.verlaengerung_status = 'zu_beantragen';
+      }
+      renderTable(state); renderBanner(state);
+      saveState(state, {replay: replaySetClientFields(clientId, _patch, client)}).catch(function(e){
+        client[field] = backup; client.verlaengerung_status = statusBackup; renderTable(state);
+        setStatus('Fehler: '+e.message, true);
+      });
+    }
+    function cancelDate(){ dsaved = true; cleanupDate(); renderTable(state); }
+    function outsideDate(e){ if (!td.contains(e.target)) commitDate(true); }
+
+    // 'change' feuert bei Kalenderauswahl UND bei vollständig getipptem Datum.
+    input.addEventListener('change', function(){ commitDate(false); });
+    input.addEventListener('keydown', function(e){
+      if (e.key === 'Enter') { e.preventDefault(); commitDate(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancelDate(); }
+    });
+    // Klick außerhalb committet. Native Kalender-Klicks erzeugen KEIN Page-mousedown,
+    // daher schließt das Öffnen/Bedienen des Kalenders das Editing NICHT mehr.
+    // KEIN blur->save: das Öffnen des Kalenders blurrt in manchen Browsern den Input.
+    setTimeout(function(){ if(!dsaved) document.addEventListener('mousedown', outsideDate, true); }, 0);
+    return;
+  } else if (type === 'text-kt') {
+    // Kostentraeger-Zelle: zweite Zeile fuer Detail
+    input.type = 'text';
+    input.value = client.kostenzusage_traeger || '';
+    var inputDetail = document.createElement('input');
+    inputDetail.className = 'bp-inline-input';
+    inputDetail.type = 'text';
+    inputDetail.value = client.kostenzusage_detail || '';
+    inputDetail.placeholder = 'Detail (z.B. PKV 6W)';
+    inputDetail.style.marginTop = '2px';
+    td.innerHTML = '';
+    td.appendChild(input);
+    td.appendChild(inputDetail);
+    input.focus();
+    function saveKt() {
+      var t = input.value.trim(), d = inputDetail.value.trim();
+      if (t === (client.kostenzusage_traeger||'') && d === (client.kostenzusage_detail||'')) {
+        renderTable(state); return;
+      }
+      var backup = {kostenzusage_traeger: client.kostenzusage_traeger, kostenzusage_detail: client.kostenzusage_detail};
+      client.kostenzusage_traeger = t || null;
+      client.kostenzusage_detail = d || null;
+      client.updatedAt = new Date().toISOString();
+      renderTable(state); renderBanner(state);
+      saveState(state, {replay: replaySetClientFields(client.id,
+        {kostenzusage_traeger: client.kostenzusage_traeger, kostenzusage_detail: client.kostenzusage_detail},
+        client)}).catch(function(e){
+        Object.assign(client, backup); renderTable(state);
+        setStatus('Fehler: '+e.message, true);
+      });
+    }
+    var saving = false;
+    [input, inputDetail].forEach(function(el){
+      el.addEventListener('keydown', function(e){
+        if (e.key==='Enter') el.blur();
+        if (e.key==='Escape') { renderTable(state); }
+      });
+      el.addEventListener('blur', function(){
+        if (saving) return; saving = true;
+        setTimeout(function(){
+          if (!td.contains(document.activeElement)) saveKt();
+          else saving = false;
+        }, 150);
+      });
+    });
+    return;
+  } else {
+    input.type = 'text';
+    input.value = currentVal;
+  }
+
+  td.innerHTML = '';
+  td.appendChild(input);
+  input.focus();
+  if (input.type === 'text') input.select();
+
+  var saved = false;
+  function save() {
+    if (saved) return; saved = true;   // Doppel-Save verhindern (change + blur)
+    var newVal = input.value.trim() || null;
+    if (newVal === (currentVal || null)) { renderTable(state); return; }
+    if (type === 'date' && newVal && !dateInRange(newVal)) {
+      renderTable(state); setStatus(dateRangeMsg(), true); return;   // ungültiges Jahr verwerfen
+    }
+    var backup = client[field];
+    client[field] = newVal;
+    client.updatedAt = new Date().toISOString();
+    var _patch = {}; _patch[field] = newVal;
+    renderTable(state); renderBanner(state);
+    saveState(state, {replay: replaySetClientFields(clientId, _patch, client)}).catch(function(e){
+      client[field] = backup; renderTable(state);
+      setStatus('Fehler: '+e.message, true);
+    });
+  }
+  input.addEventListener('blur', save);
+  // Native <input type="date">: 'change' feuert zuverlässig bei Auswahl im
+  // Kalender-Popup; 'blur' bleibt dort oft aus. Sonst würden Status/Ü-Gruppe
+  // nach Datumsänderung nicht neu berechnet. blur dient als Backup.
+  if (input.type === 'date') input.addEventListener('change', save);
+  input.addEventListener('keydown', function(e){
+    if (e.key==='Enter') input.blur();
+    if (e.key==='Escape') { saved = true; renderTable(state); }  // Discard, Save blocken
+  });
+}
+
+function handleInlineToggle(clientId, field) {
+  if (!canEdit) return;
+  mutate(clientId, function(client){ client[field] = !client[field]; });
+}
+
+// ── UTILITIES ─────────────────────────────────────────────────────────
+function val(id){var el=document.getElementById(id);return el?el.value.trim():'';}
+var _statusTimer=null;
+function setStatus(msg,isErr){
+  if(_statusTimer){clearTimeout(_statusTimer);_statusTimer=null;}
+  if(!msg){STATUS_EL.className='bp-status';STATUS_EL.textContent='';return;}
+  var type=isErr?'bp-status-error':'bp-status-ok';
+  STATUS_EL.textContent=msg;
+  STATUS_EL.className='bp-status bp-status-visible '+type;
+  var delay=isErr?7000:4000;
+  _statusTimer=setTimeout(function(){
+    STATUS_EL.style.opacity='0';
+    setTimeout(function(){
+      STATUS_EL.className='bp-status';
+      STATUS_EL.textContent='';
+      STATUS_EL.style.opacity='';
+    },400);
+  },delay);
+}
+function closeModal(){MODAL_EL.innerHTML='<!-- Modals -->';}
+
+// ── VA-Entscheidungs-Modals (Ablehnungs-Flow) ─────────────────────────────
+// Selbstzahler-Notiz fürs Kostenträger-Detail: "ab DD.MM. SZ" (Selbstzahler ab dem
+// Tag NACH dem Ende der Kostenzusage; ohne Kostenzusage nur "SZ").
+function selbstzahlerNote(kzBisIso){
+  var kzE=parseISO(kzBisIso); var ab=kzE?addDays(kzE,1):null;
+  return ab ? ('ab '+pad(ab.getDate())+'.'+pad(ab.getMonth()+1)+'. SZ') : 'SZ';
+}
+function openVaDecisionModal(clientId){
+  // Aus 'beantragt' ODER 'widerspruch': bewilligt oder abgelehnt
+  var c=state.clients.find(function(x){return x.id===clientId;}); if(!c)return;
+  MODAL_EL.innerHTML=
+    '<div class="bp-overlay" data-bp-action="close-modal">'+
+    '<div class="bp-modal bp-modal-sm" role="dialog" aria-modal="true">'+
+    '<div class="bp-modal-header"><span class="bp-modal-title">Entscheidung zum Verl\u00e4ngerungsantrag</span>'+
+    '<button class="bp-modal-close" data-bp-action="close-modal">&times;</button></div>'+
+    '<div class="bp-modal-body"><p><strong>'+h(c.name)+'</strong>: Wie wurde der Antrag beschieden?</p></div>'+
+    '<div class="bp-modal-footer">'+
+    '<button class="bp-btn" data-bp-action="close-modal">Abbrechen</button>'+
+    '<button class="bp-btn" data-bp-action="va-abgelehnt" data-bp-id="'+h(clientId)+'" style="background:#de350b;color:#fff">Abgelehnt</button>'+
+    '<button class="bp-btn bp-btn-primary" data-bp-action="set-bewilligt" data-bp-id="'+h(clientId)+'" style="background:#36b37e;border-color:#36b37e">Bewilligt</button>'+
+    '</div></div></div>';
+  bindEsc();
+}
+function openAbgelehntModal(clientId){
+  // Nach Ablehnung: Widerspruch / Eigene Kosten / Entlassdatum vorziehen
+  var c=state.clients.find(function(x){return x.id===clientId;}); if(!c)return;
+  MODAL_EL.innerHTML=
+    '<div class="bp-overlay" data-bp-action="close-modal">'+
+    '<div class="bp-modal bp-modal-sm" role="dialog" aria-modal="true">'+
+    '<div class="bp-modal-header"><span class="bp-modal-title">Antrag abgelehnt \u2014 wie weiter?</span>'+
+    '<button class="bp-modal-close" data-bp-action="close-modal">&times;</button></div>'+
+    '<div class="bp-modal-body"><p><strong>'+h(c.name)+'</strong>: Der Verl\u00e4ngerungsantrag wurde abgelehnt. Bitte w\u00e4hlen:</p>'+
+    '<div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">'+
+    '<button class="bp-btn" data-bp-action="va-widerspruch" data-bp-id="'+h(clientId)+'" style="background:#6554c0;color:#fff">Widerspruch einlegen</button>'+
+    '<button class="bp-btn" data-bp-action="va-eigene-kosten" data-bp-id="'+h(clientId)+'" style="background:#00857a;color:#fff">Eigene Kosten \u2014 Entlassdatum bleibt</button>'+
+    '<button class="bp-btn" data-bp-action="va-entlass-vorziehen" data-bp-id="'+h(clientId)+'">Entlassdatum vorziehen \u2026</button>'+
+    '</div></div>'+
+    '<div class="bp-modal-footer"><button class="bp-btn" data-bp-action="close-modal">Abbrechen</button></div>'+
+    '</div></div>';
+  bindEsc();
+}
+function openEntlassVorziehenModal(clientId){
+  var c=state.clients.find(function(x){return x.id===clientId;}); if(!c)return;
+  var prefill=c.kostenzusage_bis||c.verlaengerung_bis||'';
+  MODAL_EL.innerHTML=
+    '<div class="bp-overlay" data-bp-action="close-modal">'+
+    '<div class="bp-modal bp-modal-sm" role="dialog" aria-modal="true">'+
+    '<div class="bp-modal-header"><span class="bp-modal-title">Entlassdatum vorziehen</span>'+
+    '<button class="bp-modal-close" data-bp-action="close-modal">&times;</button></div>'+
+    '<div class="bp-modal-body">'+
+    '<div class="bp-field"><label for="bp-ev-d">Neues Entlassdatum f\u00fcr <strong>'+h(c.name)+'</strong></label>'+
+    '<input type="date" id="bp-ev-d" class="bp-input" value="'+h(prefill)+'"'+dateAttrs('date')+'>'+
+    '<div class="bp-hint">Da keine Verl\u00e4ngerung bewilligt wurde, endet die Behandlung fr\u00fcher. Vorbelegt mit dem Ende der Kostenzusage.</div></div>'+
+    '</div>'+
+    '<div class="bp-modal-footer">'+
+    '<button class="bp-btn" data-bp-action="close-modal">Abbrechen</button>'+
+    '<button class="bp-btn bp-btn-primary" data-bp-action="va-entlass-vorziehen-confirm" data-bp-id="'+h(clientId)+'">\u00dcbernehmen</button>'+
+    '</div></div></div>';
+  bindEsc();
+}
+function bindEsc(){
+  function onEsc(e){if(e.key==='Escape'){closeModal();document.removeEventListener('keydown',onEsc);}}
+  document.addEventListener('keydown',onEsc);
+}
+function showErr(errMap){
+  Object.entries(errMap).forEach(function(kv){
+    var el=document.getElementById(kv[0]); if(!el)return;
+    el.classList.add('bp-input-error');
+    var e2=document.createElement('div');
+    e2.className='bp-field-error'; e2.textContent=kv[1];
+    el.parentElement.appendChild(e2);
+  });
+}
+// Gruppen die das Selbsttest-Panel sehen dürfen
+var ADMIN_GROUPS = ['confluence-administrators', 'confluenceAdmin'];
+var isAdmin = false;
+
+function checkAdminGroup(){
+  console.log('[BP-admin] checkAdminGroup() start');
+  var username = (window.AJS && AJS.Meta) ? AJS.Meta.get('remote-user') : null;
+  console.log('[BP-admin] AJS.Meta.get("remote-user") =', username);
+  if(!username){
+    console.warn('[BP-admin] kein remote-user verfügbar → isAdmin=false (Selbsttest-Panel bleibt versteckt)');
+    return Promise.resolve(false);
+  }
+  var base = (window.AJS && AJS.contextPath) ? AJS.contextPath() : '';
+  var url = base + '/rest/api/user/memberof?username=' + encodeURIComponent(username) + '&limit=200';
+  console.log('[BP-admin] fetch:', url);
+  return fetch(url, {
+    headers: {'Accept': 'application/json'},
+    credentials: 'same-origin'
+  })
+  .then(function(r){
+    console.log('[BP-admin] HTTP', r.status, r.statusText);
+    if(!r.ok) throw new Error('memberof HTTP '+r.status);
+    return r.json();
+  })
+  .then(function(data){
+    var names = (data && data.results) ? data.results.map(function(g){return g.name;}) : [];
+    console.log('[BP-admin] User-Gruppen ('+names.length+'):', names);
+    console.log('[BP-admin] gesuchte Admin-Gruppen:', ADMIN_GROUPS);
+    var wanted = ADMIN_GROUPS.map(function(s){return s.toLowerCase();});
+    var match = names.filter(function(n){ return wanted.indexOf(n.toLowerCase())!==-1; });
+    var ok = match.length>0;
+    console.log('[BP-admin] Match:', match, '→ isAdmin =', ok);
+    return ok;
+  })
+  .catch(function(e){
+    console.warn('[BP-admin] Fehler:', e.message, '→ isAdmin=false');
+    return false;
+  });
+}
+
+function wireSelftestButton(){
+  var btn = document.getElementById('bp-selftest-run-' + instId);
+  if(!btn){ console.log('[BP] Selbsttest-Button nicht gefunden (noch nicht im DOM?)'); return; }
+  if(btn._bpWired) return;
+  btn._bpWired = true;
+  btn.addEventListener('click', function(){
+    console.log('[BP] Selbsttest gestartet');
+    btn.disabled = true;
+    try { SELFTEST.run(); }
+    catch(e){ console.error('[BP] Selbsttest-Fehler', e); }
+    finally { btn.disabled = false; }
+  });
+  console.log('[BP] Selbsttest-Button verdrahtet');
+}
+
+function applyAdminUI(){
+  var st = document.getElementById('bp-selftest-' + instId);
+  if(!st){
+    console.warn('[BP-admin] Selbsttest-Panel-Element nicht gefunden: bp-selftest-'+instId);
+    return;
+  }
+  st.style.display = isAdmin ? 'block' : 'none';
+  console.log('[BP-admin] Selbsttest-Panel:', isAdmin ? 'SICHTBAR' : 'versteckt');
+  if(isAdmin) wireSelftestButton();
+}
+
+function applyAuthUI(){
+  // Buttons sind in der Titelzeile (canEdit-gated in renderTable).
+  if(!canEdit){
+    var hint=document.createElement('div');
+    hint.className='bp-readonly-hint';
+    hint.textContent='Nur-Lese-Ansicht \u2014 zum Bearbeiten Seite entsperren.';
+    ROOT.insertBefore(hint,TABLE_EL);
+  }
+}
+// ── KONKURRENZ: Versions-Polling + Update-Hinweis ────────────────────
+// Confluence-eigene Update-Meldungen/kooperatives Bearbeiten greifen NICHT,
+// weil die Daten in Content Properties liegen (eigene Version, keine Seiten-
+// version, kein Synchrony). Wir pollen daher selbst die Property-Version:
+// alle 60s + bei Tab-Fokus, pausiert im Hintergrund. Bei höherer Server-
+// version → dezentes Banner. Niemals automatisch überschreiben/neu rendern;
+// der Nutzer entscheidet per Klick (lädt dann frisch = korrekter Stand+Version).
+var _pollTimer = null;
+var _polling   = false;
+
+function isEditing(){
+  // Inline-Edit aktiv? (Input/Select mit bp-inline-input in der Tabelle)
+  return !!(TABLE_EL && TABLE_EL.querySelector('.bp-inline-input'));
+}
+
+function showUpdateBanner(){
+  var el = document.getElementById('bp-update-' + instId);
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'bp-update-' + instId;
+    el.className = 'bp-update-banner';
+    var ref = BANNER_EL || TABLE_EL;
+    if(ref && ref.parentNode) ref.parentNode.insertBefore(el, ref);
+    else ROOT.insertBefore(el, TABLE_EL);
+  }
+  el.innerHTML = '<span class="bp-update-text">\u21bb Es gibt neue \u00c4nderungen von einer anderen Person.</span>'+
+    '<button class="bp-btn bp-btn-sm" data-bp-action="apply-update">Jetzt aktualisieren</button>';
+  el.style.display = 'flex';
+}
+
+function hideUpdateBanner(){
+  var el = document.getElementById('bp-update-' + instId);
+  if(el) el.style.display = 'none';
+}
+
+function applyPendingUpdate(){
+  // Immer frisch laden → korrekter Stand UND korrekte stateVersion
+  // (auch wenn der Nutzer zwischenzeitlich selbst gespeichert hat).
+  loadState().then(function(){
+    renderTable(state); renderBanner(state);
+    hideUpdateBanner(); setStatus('Aktualisiert.');
+  }).catch(function(e){ setStatus('Fehler beim Laden: '+(e&&e.message||e), true); });
+}
+
+function pollVersion(){
+  if(_polling || !pageId || document.hidden) return;
+  _polling = true;
+  fetch('/rest/api/content/' + pageId + '/property/' + PROP_KEY, {headers:{Accept:'application/json'}})
+  .then(function(r){ return r.status === 404 ? null : r.json(); })
+  .then(function(j){
+    _polling = false;
+    if(j && j.version && j.version.number > stateVersion) showUpdateBanner();
+  })
+  .catch(function(){ _polling = false; });
+}
+
+function startPolling(){
+  if(_pollTimer) return;
+  _pollTimer = setInterval(pollVersion, 60000);          // alle 60s
+  document.addEventListener('visibilitychange', function(){
+    if(!document.hidden) pollVersion();                  // bei Tab-Fokus sofort
+  });
+}
+
+// ── ACTIVITY-STREAM-PING (Sprintplan 2b/2c) ───────────────────────────
+// Erzeugt eine echte, aber UNSICHTBARE Seitenversion → nativer „Seite
+// geändert"-Eintrag im Activity-Stream/Dashboard, korrekt dem Bearbeiter
+// zugeordnet (läuft unter dessen Session). Mechanik: ein Anchor-Makro mit
+// hochzählender Nummer wird an den Storage-Body ANGEHÄNGT (das Macro selbst
+// wird NIE angefasst). Confluence dedupliziert byte-gleiche Edits, daher die
+// wechselnde Nummer. Strikt fire-and-forget: blockiert NIE eine Datenänderung;
+// gibt nach maxFails still auf. Drosselung + Coalesce + Close-Flush + 409-Schutz.
+// HINWEIS: minorEdit:false ist nötig (Major-Edit erscheint im Stream), löst aber
+// Watcher-Mails aus → Mail-Unterdrückung instanzseitig lösen (Pitfall 12).
+var ACTIVITY = {
+  enabled:       true,
+  minIntervalMs: 5*60*1000,   // höchstens ~1 Bump / 5 min (Drosselung)
+  coalesceMs:    4000,        // Bearbeitungs-Schwung zu EINEM Bump falten
+  maxFails:      3,           // nach N Dauerfehlern still aufgeben
+  message:       'Belegungsplaner aktualisiert',
+  markerPrefix:  'bp-activity-',
+  _coalesce:null, _throttle:null, _lastBump:0, _pending:false, _fails:0, _inflight:false
+};
+
+function _actCtx(){ return (window.AJS && AJS.contextPath) ? AJS.contextPath() : ''; }
+
+function activityAnchor(n){
+  // Anchor-Makro im Storage-Format; rendert unsichtbar.
+  return '<ac:structured-macro ac:name="anchor" ac:schema-version="1">'+
+         '<ac:parameter ac:name="">'+ACTIVITY.markerPrefix+n+'</ac:parameter>'+
+         '</ac:structured-macro>';
+}
+
+// Plant einen Bump (Coalesce). Wird NUR aus erfolgreichem Save aufgerufen.
+function scheduleActivityBump(){
+  if(!ACTIVITY.enabled || !canEdit || ACTIVITY._fails>=ACTIVITY.maxFails) return;
+  ACTIVITY._pending = true;
+  if(ACTIVITY._coalesce) clearTimeout(ACTIVITY._coalesce);
+  ACTIVITY._coalesce = setTimeout(_actThrottled, ACTIVITY.coalesceMs);
+}
+
+function _actThrottled(){
+  ACTIVITY._coalesce = null;
+  var wait = ACTIVITY.minIntervalMs - (Date.now() - ACTIVITY._lastBump);
+  if(wait <= 0){ doActivityBump(); return; }
+  if(ACTIVITY._throttle) clearTimeout(ACTIVITY._throttle);
+  ACTIVITY._throttle = setTimeout(function(){ ACTIVITY._throttle=null; doActivityBump(); }, wait);
+}
+
+function doActivityBump(retry){
+  retry = retry || 0;
+  if(!ACTIVITY._pending || ACTIVITY._inflight) return;
+  if(!ACTIVITY.enabled || !canEdit || ACTIVITY._fails>=ACTIVITY.maxFails) return;
+  ACTIVITY._inflight = true;
+  var base = _actCtx();
+  fetch(base + '/rest/api/content/' + pageId + '?expand=body.storage,version,space',
+        {headers:{Accept:'application/json'}})
+  .then(function(r){ if(!r.ok) throw new Error('GET '+r.status); return r.json(); })
+  .then(function(page){
+    var body = page.body.storage.value;
+    // Marker round-trip-stabil finden: nur die NUMMER ersetzen (Anchor-Struktur
+    // unangetastet → übersteht Confluence-Normalisierung). Sonst frisch anhängen.
+    var esc = ACTIVITY.markerPrefix.replace(/[-\/\\^$*+?.()|[\]{}]/g,'\\$&');
+    var re  = new RegExp(esc + '(\\d+)');
+    var m = body.match(re);
+    var newBody = m ? body.replace(re, ACTIVITY.markerPrefix + (parseInt(m[1],10)+1))
+                    : body + activityAnchor(1);
+    var put = {
+      id: page.id, type:'page', title: page.title,
+      space:{ key: page.space.key },
+      body:{ storage:{ value:newBody, representation:'storage' } },
+      version:{ number: page.version.number+1, minorEdit:false, message:ACTIVITY.message }
+    };
+    return fetch(base + '/rest/api/content/' + pageId, {
+      method:'PUT',
+      headers:{'Content-Type':'application/json','X-Atlassian-Token':'no-check'},
+      body: JSON.stringify(put)
+    });
+  })
+  .then(function(r){
+    ACTIVITY._inflight = false;
+    if(r.status===409 && retry<2){ doActivityBump(retry+1); return; }  // frische Version, erneut
+    if(!r.ok) throw new Error('PUT '+r.status);
+    ACTIVITY._pending = false;
+    ACTIVITY._lastBump = Date.now();
+    ACTIVITY._fails = 0;
+  })
+  .catch(function(e){
+    ACTIVITY._inflight = false;
+    ACTIVITY._fails++;
+    console.warn('[bp] Activity-Bump fehlgeschlagen ('+ACTIVITY._fails+'/'+ACTIVITY.maxFails+'):', e && e.message);
+    // fire-and-forget: die fachliche Mutation bleibt unberührt
+  });
+}
+
+// Close-Flush (Best-Effort): ausstehenden Bump beim Verlassen sofort auslösen
+// (umgeht die Drosselung). Keine Garantie bei hartem Tab-Kill — bewusst akzeptiert,
+// da die Daten ohnehin sicher persistiert sind.
+function flushActivityBump(){
+  if(!ACTIVITY._pending || ACTIVITY._fails>=ACTIVITY.maxFails) return;
+  if(ACTIVITY._coalesce){ clearTimeout(ACTIVITY._coalesce); ACTIVITY._coalesce=null; }
+  if(ACTIVITY._throttle){ clearTimeout(ACTIVITY._throttle); ACTIVITY._throttle=null; }
+  doActivityBump();
+}
+
+function wireActivityFlush(){
+  window.addEventListener('beforeunload', flushActivityBump);
+  document.addEventListener('visibilitychange', function(){
+    if(document.hidden) flushActivityBump();
+  });
+}
+
+// Diagnose (Sprintplan 2a): prüft, ob der Thirdparty-Activity-Endpoint auf DIESER
+// Instanz nutzbar ist (liefert 201?). Im Browser aufrufbar: _bp[instId].diagnoseActivity()
+function diagnoseActivityEndpoint(){
+  var base = _actCtx();
+  var entry = { username:(window.AJS&&AJS.Meta?AJS.Meta.get('remote-user'):'')||'',
+    action:{name:'aktualisierte', key:'updated'},
+    object:{url: base + '/pages/viewpage.action?pageId=' + pageId, title:'Belegungsplaner '+instId} };
+  return fetch(base + '/rest/activities/1.0/', {
+    method:'POST',
+    headers:{'Content-Type':'application/vnd.atl.streams.thirdparty+json','X-Atlassian-Token':'no-check'},
+    body: JSON.stringify(entry)
+  }).then(function(r){
+    console.log('[bp] Thirdparty-Activity-Endpoint Status:', r.status,
+      r.status===201 ? '→ NUTZBAR' : '→ NICHT nutzbar (Edit-Bump verwenden)');
+    return r.status;
+  }).catch(function(e){ console.warn('[bp] Diagnose-Fehler:', e && e.message); return -1; });
+}
+
+function scheduleMidnightRefresh(){
+  var now=new Date(), tom=new Date(now.getFullYear(),now.getMonth(),now.getDate()+1);
+  setTimeout(function(){
+    loadState().then(function(){renderTable(state);renderBanner(state);scheduleMidnightRefresh();});
+  },tom-now);
+}
+
+// ── EVENT DELEGATION ──────────────────────────────────────────────────
+ROOT.addEventListener('click',function(e){
+  var t=e.target;
+  // bubble up to find data-bp-action
+  while(t&&t!==ROOT&&!t.getAttribute('data-bp-action'))t=t.parentElement;
+  if(!t)return;
+  var action=t.getAttribute('data-bp-action');
+  var id=t.getAttribute('data-bp-id');
+  if(!action)return;
+  // Overlay click: only close if click is directly on overlay
+  if(action==='close-modal'&&t.classList.contains('bp-overlay')&&e.target!==t)return;
+  try{
+    switch(action){
+      case 'add':             openAufnahmeModal(); break;
+      case 'print':           openPrintModal(); break;
+      case 'confirm-print':   handleConfirmPrint(); break;
+      case 'versand':          openVersandModal(); break;
+      case 'settings':         openSettingsModal(); break;
+      case 'save-settings':    handleSaveSettings(); break;
+      case 'selftest':         SELFTEST.run(); break;
+      case 'versand-mail':    handleVersandMail(); break;
+      case 'reload':          loadState().then(function(){renderTable(state);renderBanner(state);setStatus('Aktualisiert.');}); break;
+      case 'toggle-entlassen': showEntlassen=!showEntlassen; renderTable(state); break;
+      case 'sort': {
+        var sk=t.getAttribute('data-bp-sortkey');
+        if(sk){ if(sortKey===sk){ sortDir=(sortDir==='asc'?'desc':'asc'); } else { sortKey=sk; sortDir='asc'; } renderTable(state); }
+        break;
+      }
+      case 'apply-update':    applyPendingUpdate(); break;
+      case 'close-modal':     closeModal(); break;
+      case 'save-aufnahme':   handleAufnahme(); break;
+      case 'edit':            openEditModal(id); break;
+      case 'set-beantragt':   applyPatch(id,{verlaengerung_status:'beantragt'}); break;
+      case 'set-bewilligt': {
+        var cl=state.clients.find(function(x){return x.id===id;}); if(!cl)break;
+        if(!cl.verlaengerung_bis){setStatus('Kein Verlängerungsdatum eingetragen.',true);break;}
+        applyPatch(id,{kostenzusage_bis:cl.verlaengerung_bis,verlaengerung_bis:null,verlaengerung_status:'genehmigt'});
+        break;
+      }
+      case 'decide-va':        openVaDecisionModal(id); break;       // beantragt/widerspruch → bewilligt|abgelehnt
+      case 'va-abgelehnt':     applyPatch(id,{verlaengerung_status:'abgelehnt'}); break;
+      case 'decide-abgelehnt': openAbgelehntModal(id); break;        // abgelehnt → Widerspruch|Eigene Kosten|Entlass vorziehen
+      case 'va-widerspruch':   applyPatch(id,{verlaengerung_status:'widerspruch'}); break;
+      case 'va-eigene-kosten': {  // Entlassdatum bleibt; Detail um "ab DD.MM. SZ" ergänzen
+        var clk=state.clients.find(function(x){return x.id===id;}); if(!clk)break;
+        var _note=selbstzahlerNote(clk.kostenzusage_bis);
+        var _det=clk.kostenzusage_detail||'';
+        var _patch={verlaengerung_status:'eigene_kosten'};
+        if(_det.indexOf(_note)<0) _patch.kostenzusage_detail=_det?(_det+'; '+_note):_note;
+        applyPatch(id,_patch);
+        break;
+      }
+      case 'va-entlass-vorziehen': openEntlassVorziehenModal(id); break;
+      case 'va-entlass-vorziehen-confirm': {
+        var dv=document.getElementById('bp-ev-d');
+        if(!dv||!dv.value){setStatus('Bitte Datum w\u00e4hlen.',true);break;}
+        if(!dateInRange(dv.value)){setStatus(dateRangeMsg(),true);break;}
+        applyPatch(id,{entlassdatum:dv.value, verlaengerung_status:'keine', verlaengerung_bis:null});
+        break;
+      }
+      case 'inline-select': {
+        var field3=t.getAttribute('data-bp-field');
+        var opts3=(t.getAttribute('data-bp-opts')||'').split('|').filter(Boolean);
+        var cl3=state.clients.find(function(x){return x.id===id;}); if(!cl3)break;
+        // Bestandswert erhalten, auch wenn er nicht (mehr) in der Liste steht
+        var cur3=cl3[field3]||'';
+        if(cur3 && opts3.indexOf(cur3)<0) opts3.push(cur3);
+        var sel=document.createElement('select');
+        sel.className='bp-inline-input';
+        sel.innerHTML='<option value="">—</option>'+opts3.map(function(o){
+          return '<option value="'+h(o)+'"'+(o===cl3[field3]?' selected':'')+'>'+h(o)+'</option>';
+        }).join('');
+        t.replaceWith(sel); sel.focus();
+        sel.addEventListener('change',function(){
+          mutate(id, function(client){ client[field3]=sel.value||null; });
+        });
+        sel.addEventListener('blur',function(){renderTable(state);});
+        break;
+      }
+      case 'inline-toggle':   handleInlineToggle(id, t.getAttribute('data-bp-field')); break;
+      case 'inline-edit': {
+        var field2 = t.getAttribute('data-bp-field');
+        var type2  = t.getAttribute('data-bp-type');
+        // find the actual td (might be the span or the td itself)
+        var td2 = t.tagName==='TD' ? t : t.closest('td');
+        if (td2) handleInlineEdit(td2, id, field2, type2);
+        break;
+      }
+      case 'save-edit':       handleEdit(id); break;
+      case 'delete-client':   handleDelete(id); break;
+      case 'quick-verlaengern':         openQuickVerlaengernModal(id); break;
+      case 'quick-entlassen':           openQuickEntlassenModal(id); break;
+      case 'confirm-quick-verlaengern': handleQuickVerlaengern(id); break;
+      case 'confirm-quick-entlassen':   handleQuickEntlassen(id); break;
+    }
+  }catch(err){console.error('[bp]',err);setStatus(err.message,true);}
+});
+
+// ── INIT ──────────────────────────────────────────────────────────────
+function init(){
+  console.log('[bp]', instId, 'init start, pageId=', pageId);
+  fetchTinyLink();   // nicht blockierend — Fallback greift, bis er da ist
+  Promise.all([checkCanEdit(),loadState()]).then(function(){
+    applyAuthUI();
+    checkAdminGroup().then(function(a){ isAdmin=a; applyAdminUI(); });
+    renderTable(state);
+    renderBanner(state);
+    applyViewCSS();
+    scheduleMidnightRefresh();
+    startPolling();
+    wireActivityFlush();
+    setStatus('');
+    wireSelftestButton();
+  }).catch(function(e){console.error('[bp]', instId, 'init error', e); setStatus('Fehler beim Laden: '+(e&&e.message||e),true);});
+}
+
+// Module-Export für Erweiterungen (Sprint 6+)
+window._bp=window._bp||{};
+window._bp[instId]={
+  loadState:loadState, saveState:saveState,
+  getState:function(){return state;},
+  canEdit:function(){return canEdit;},
+  getPermaLink:getPermaLink, getLongLink:getLongLink, fetchTinyLink:fetchTinyLink,
+  getThVerbalList:getThVerbalList, getThNvList:getThNvList,
+  paramThVerbalList:paramThVerbalList, paramThNvList:paramThNvList,
+  refresh:function(){renderTable(state);renderBanner(state);},
+  activity:ACTIVITY, diagnoseActivity:diagnoseActivityEndpoint
+};
+
+init();
+
+})();
+//]]>
+</script>
+<details class="bp-guide">
+<summary class="bp-guide-summary">&hellip; Anleitung</summary>
+<div class="bp-guide-body">
+
+<h4>Neue Aufnahme</h4>
+<ol>
+  <li>Schaltfl&auml;che <strong>+ Neue Aufnahme</strong> klicken.</li>
+  <li>Formular ausf&uuml;llen: Name, Aufnahmedatum, Kostentr&auml;ger, Kostenzusage&nbsp;bis&nbsp;(Datum), ggf.&nbsp;Detail, <strong>Wahlleistung</strong>, Bezugstherapeuten (verbal/non-verbal).</li>
+  <li><strong>Aufnehmen</strong> klicken &mdash; System berechnet automatisch vorl.&nbsp;Entlassdatum und &Uuml;-Gruppe&nbsp;Datum.</li>
+</ol>
+
+<h4>Felder direkt bearbeiten (In-Place)</h4>
+<p>Klick auf eine Zelle &ouml;ffnet ein Eingabefeld direkt in der Tabelle:<br>
+<strong>Enter</strong> speichert &mdash; <strong>Escape</strong> verwirft &mdash; <strong>Klick ausserhalb</strong> speichert.<br>
+Nicht editierbar: <em>vorl.&nbsp;Entlassdatum</em> und <em>&Uuml;-Gruppe&nbsp;Datum</em> (werden automatisch berechnet).</p>
+
+<h4>Verl&auml;ngerungsantrag</h4>
+<ol>
+  <li>Klient &ouml;ffnen (&#x270e;) &rarr; <em>Verl&auml;ngerung bis</em>&nbsp;Datum eintragen &rarr; Speichern.<br>
+      &rArr; Badge&nbsp;<strong>VA&nbsp;stellen</strong> erscheint automatisch.</li>
+  <li>Antrag abgeschickt? Badge <strong>VA&nbsp;stellen&nbsp;&#x25b6;</strong> klicken &rarr; wird zu <strong>VA&nbsp;beantragt</strong>.</li>
+  <li>Kostenzusage erhalten? Badge <strong>VA&nbsp;beantragt&nbsp;&#x25b6;</strong> klicken &rarr; Kostenzusage wird auf Verl&auml;ngerungsdatum gesetzt, Status <strong>VA&nbsp;bewilligt</strong>.</li>
+</ol>
+
+<h4>Entscheidungs-Frist (Vorlauf)</h4>
+<p>Liegt das vorl.&nbsp;Entlassdatum weniger als <em>X</em>&nbsp;Tage entfernt und ist weder ein Verl&auml;ngerungsantrag noch ein Entlassdatum eingetragen, erscheint das Badge <strong>Entscheidung</strong> (orange) &mdash; ist das Datum bereits &uuml;berschritten, wird es <strong>&uuml;berf&auml;llig</strong> (rot). Das Banner oben listet alle betroffenen Klienten mit Schnell-Aktionen.</p>
+<p>Der Vorlauf <em>X</em> ist einstellbar (Standard: 17&nbsp;Tage) &mdash; siehe <strong>Einstellungen</strong>. Der aktuell eingestellte Wert steht in der Titelzeile (&bdquo;&hellip;&nbsp;Tage Vorlauf&ldquo;).</p>
+
+<h4>Entlassung</h4>
+<ol>
+  <li>Klient &ouml;ffnen (&#x270e;) &rarr; <em>Entlassdatum (final)</em> eintragen &rarr; Speichern.<br>
+      &rArr; Das <strong>Entscheidung</strong>-Badge entf&auml;llt. Ab 6&nbsp;Tagen vor dem Entlassdatum wird die Zeile grau (&Uuml;-Gruppe-Phase &mdash; eine volle Woche, sodass jeder Wochentag Mo&ndash;Fr einmal besucht wird).</li>
+  <li>Nach Ablauf des Entlassdatums verschwindet die Zeile automatisch aus der Liste.</li>
+</ol>
+
+<h4>Kapazit&auml;t</h4>
+<p>Regelkapazit&auml;t: <strong>9 aktive Klienten</strong> (ohne &Uuml;-Gruppe). &Uuml;-Gruppe-Teilnehmer belegen keinen Platz mehr. Ausnahmsweise bis zu 10 m&ouml;glich.</p>
+
+<h4>Einstellungen</h4>
+<ol>
+  <li>Zahnrad-Schaltfl&auml;che <strong>&#9881;</strong> (Titelzeile) klicken.</li>
+  <li><em>Entscheidungsgrenze (Tage)</em> festlegen &mdash; ab wie vielen Tagen vor dem vorl.&nbsp;Entlassdatum das <strong>Entscheidung</strong>-Badge erscheint (1&ndash;365, Standard&nbsp;17).</li>
+  <li><em>Bezugstherapeut:innen &mdash; verbal / non-verbal</em> pflegen: Namen mit <strong>Komma</strong> trennen (Semikolon geht auch).<br>
+      &rArr; Gepflegte Listen erscheinen als <strong>Auswahlfeld</strong> in Aufnahme, Bearbeiten und direkt in der Tabelle. Leere Liste&nbsp;&rarr; Freitext-Eingabe.</li>
+  <li><strong>Speichern</strong> &mdash; Statusberechnung, Banner und Auswahllisten aktualisieren sich sofort.</li>
+</ol>
+<p><strong>Hinweis zu den Macro-Parametern:</strong> Die Parameter <em>TherapeutenVerbal</em> / <em>TherapeutenNonVerbal</em> sind <em>veraltet</em>, funktionieren aber weiterhin.
+Solange die Einstellung nie gespeichert wurde, gelten die Parameter; der Dialog ist damit vorbelegt.
+Nach dem ersten Speichern hat die <strong>Einstellung Vorrang</strong> &mdash; auch wenn sie bewusst leer gelassen wird.
+Bereits zugeordnete Namen bleiben in jedem Fall erhalten, selbst wenn sie nicht mehr in der Liste stehen.</p>
+
+<h4>Drucken / PDF</h4>
+<ol>
+  <li>Schaltfl&auml;che <strong>&#128438;&nbsp;Drucken</strong> klicken.</li>
+  <li>Gew&uuml;nschte Spalten ausw&auml;hlen (Auswahl wird gespeichert).</li>
+  <li>Im Browser-Druckdialog <em>Als PDF speichern</em> w&auml;hlen.</li>
+</ol>
+
+<h4>Versand</h4>
+<ol>
+  <li>Schaltfl&auml;che <strong>&#9993;&nbsp;Versand</strong> klicken.</li>
+  <li>Empf&auml;nger, Betreff und Nachricht pr&uuml;fen &mdash; die Angaben werden als Vorlage gespeichert.</li>
+  <li><em>Mail&nbsp;&ouml;ffnen</em> &mdash; das Mail-Programm startet mit vorbef&uuml;lltem Empf&auml;nger, Betreff und Text und senden.</li>
+</ol>
+<p>Versendet wird der <strong>Link</strong>, kein PDF-Anhang &mdash; Empf&auml;nger:innen sehen darüber immer den aktuellen Stand.
+Ein PDF l&auml;sst sich weiterhin jederzeit &uuml;ber <strong>&#128438;&nbsp;Drucken</strong> in der Titelzeile erzeugen.</p>
+<p>Verwendet wird der <strong>Kurzlink</strong> aus dem Confluence-Teilen-Dialog (Form <code>&hellip;/x/44RIAg</code>), den das Macro &uuml;ber die REST-Schnittstelle abruft.
+Er bleibt g&uuml;ltig, wenn die Seite umbenannt oder verschoben wird; der Anker dahinter springt direkt zur jeweiligen Gruppe.
+Steht der Kurzlink ausnahmsweise nicht zur Verf&uuml;gung, wird automatisch die lange <em>pageId</em>-URL eingesetzt &mdash; dasselbe Ziel.
+Er steht als normaler Text in der Nachricht und kann verschoben oder gel&ouml;scht werden. Bereits gespeicherte Vorlagen werden beim n&auml;chsten &Ouml;ffnen einmalig um den Link erg&auml;nzt.</p>
+
+</div>
+</details>
+<div class="bp-selftest" id="bp-selftest-${paramGruppenbezeichnung}" style="margin-top:14px;padding:10px 14px;border:1px dashed #c1c7d0;border-radius:4px;background:#fafbfc;display:none">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <strong style="font-size:12px;color:#5e6c84">Maintainer-Werkzeuge:</strong>
+    <button class="bp-btn bp-btn-sm" id="bp-selftest-run-${paramGruppenbezeichnung}" data-bp-action="selftest">Selbsttest ausführen</button>
+    <span style="font-size:11px;color:#97a0af">— prüft Logik &amp; Handler gegen Fixture-Daten ohne echte Persistierung</span>
+  </div>
+  <div id="bp-selftest-result-${paramGruppenbezeichnung}" style="margin-top:10px"></div>
+</div>
+
+<style>
+.bp-guide{margin-top:16px;border:1px solid #dfe1e6;border-radius:4px;font-size:13px}
+.bp-guide-summary{padding:8px 14px;cursor:pointer;color:#5e6c84;font-weight:600;list-style:none;user-select:none}
+.bp-guide-summary::-webkit-details-marker{display:none}
+.bp-guide-summary::before{content:'\25b6\00a0';font-size:10px;transition:transform .15s}
+details[open] .bp-guide-summary::before{content:'\25bc\00a0'}
+.bp-guide-body{padding:4px 18px 14px;border-top:1px solid #dfe1e6;color:#172b4d;line-height:1.6}
+.bp-guide-body h4{margin:12px 0 4px;font-size:13px;color:#172b4d}
+.bp-guide-body ol,.bp-guide-body p{margin:0 0 6px}
+.bp-guide-body li{margin-bottom:3px}
+@media print{.bp-guide{display:none}.bp-selftest{display:none !important}}
+</style>
+
+<!-- END BELEGUNGSPLANER $paramGruppenbezeichnung -->
+
+#end
+## Ende #if(${paramGruppenbezeichnung})

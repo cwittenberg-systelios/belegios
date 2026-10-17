@@ -89,6 +89,11 @@
 .bp-status.bp-status-error{background:#ffebe6;border:1px solid #ff8f73;color:#bf2600;font-weight:600}
 .bp-status.bp-status-info{background:#deebff;border:1px solid #4c9aff;color:#0747a6}
 .bp-readonly-hint{font-size:12px;color:#97a0af;font-style:italic;padding:4px 0 6px}
+.bp-persist-banner{display:none;border-radius:4px;padding:8px 14px;margin-bottom:10px;font-size:13px;line-height:1.5}
+.bp-persist-error{background:#ffebe6;border:2px solid #de350b;color:#bf2600}
+.bp-persist-warn{background:#fffae6;border:1px solid #ffab00;color:#172b4d}
+.bp-load-failed{color:#bf2600;font-weight:600;padding:12px 0}
+.bp-ds-table td,.bp-ds-table th{padding:3px 6px;font-size:12px}
 .bp-capacity{font-size:12px;color:#5e6c84;padding:4px 0 2px}
 /* Banner (Sprint 5) */
 .bp-banner{background:#fff7e6;border:1px solid #ffab00;border-radius:4px;padding:10px 14px;margin-bottom:10px}
@@ -399,7 +404,12 @@ function dropLinkAnchor(text){
   return text;
 }
 
-var PROP_KEY = 'belegungsplaner_' + pageId + '_' + instId;
+// Build-Version: bei jeder Aenderung am Macro hochzaehlen (sichtbar im Fuss + Konsole).
+var BUILD_VERSION = '2.0.0 (2026-10-17)';
+// Altschluessel (Format 1, eine Property je Instanz) – wird nur noch gelesen, migriert und versiegelt.
+var LEGACY_PROP_KEY = 'belegungsplaner_' + pageId + '_' + instId;
+// Neuer Store (Format 2) je Seite + Instanz: Manifest-Folge + Chunks + Historie
+var STORE_PREFIX = 'belegios_' + pageId + '_' + instId;
 var MAX_CAP       = 10;
 var WARN_CAP      = 9;
 
@@ -412,18 +422,560 @@ var MODAL_EL  = document.getElementById('bp-modal-'   + instId);
 if (!ROOT) { console.error('[bp] Root nicht gefunden', instId); return; }
 
 var state        = null;
-var stateVersion = 0;
 var canEdit      = false;
 var showEntlassen = false;   // Wartungs-Umschalter: entlassene Klient:innen einblenden
 var sortKey = 'aufnahme';    // Sortier-Spalte (COLS.key) — Klick auf Header ändert sie
 var sortDir = 'asc';         // 'asc' | 'desc'; Standard: Aufnahmedatum aufsteigend
 
+// ── PERSISTENZ (Store) ────────────────────────────────────────────────
+// Portiert aus urlaubios/persistence.js (1.1.3), angepasst an den Belegungsplaner.
+// VELOCITY: in diesem Block kein Raute-Zeichen vor Buchstaben und kein Dollar vor
+// Buchstaben/geschweifter Klammer verwenden (test/velocity.test.js prueft das).
+//
+// Schluessel je Seite + Instanz (P = 'belegios_<pageId>_<instId>'):
+//   P.m, P.m.2, P.m.3 ...   Manifest {gen,count,token,schema,build,ts}; Folge fuer Bereichswechsel
+//   P.c-<gen>-<token>-<i>   Chunks (Copy-on-Write, Token je Schreibversuch, nie ueberschrieben)
+//   belegungsplaner_<pageId>_<instId>   Altschluessel (Format 1): wird gelesen, beim ersten
+//                           Speichern migriert und danach mit einem Platzhalter versiegelt.
+// Protokoll: Chunks schreiben -> Manifest per Versions-CAS umbiegen -> 409 = Konflikt
+// (eigene Chunks weg, frisch laden, eigenes Delta neu anwenden, max. 2x) -> 5xx/Netz =
+// Manifest nachlesen (Erfolg | Konflikt | Umzug auf naechsten Manifest-Schluessel).
+// Laden ist nie still leer: fehlende/kaputte Daten -> Ladefehler (schreibgeschuetzt) bzw.
+// Rueckfall auf den neuesten lesbaren aelteren Stand (nur Anzeige, schreibgeschuetzt).
+// Historie: die letzten 10 Generationen bleiben erhalten; Admin kann sie wiederherstellen.
+/* BELEGIOS-STORE-BEGIN */
+var BelegiosStore = (function () {
+  'use strict';
+  var CHUNK_MAX_BYTES  = 24000;   // Ziel je Chunk nach JSON-Escaping/UTF-8 (Limit 32 kB)
+  var LOAD_RETRIES     = 3;
+  var KEEP_GENERATIONS = 10;
+  var SCHEMA_VERSION   = 2;       // Format 2 = gechunkter Store (Format 1 = Einzel-Property)
+  var GUARD_TEXT = 'BELEGIOS 2: Datenformat geaendert - bitte Seite neu laden (Strg+F5). Diese Version darf nicht mehr speichern.';
+
+  function LoadError(msg, kind) {
+    var e = new Error(msg); e.name = 'LoadError'; e.isLoadError = true;
+    if (kind) e[kind] = true;
+    return e;
+  }
+  // Regex-Escape ohne Dollar-Ersetzungsmuster (Velocity-sicher): jedes Sonderzeichen mit Backslash
+  function reEsc(s) { return String(s).replace(/[^A-Za-z0-9_]/g, function (c) { return '\\' + c; }); }
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+  function newToken() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+
+  // Platzhalter unter dem Altschluessel: fuer Format-1-Clients unbrauchbar (clients ist ein
+  // String -> sortClients/find/push werfen), fuer uns eindeutig erkennbar.
+  function guardValue() { return { belegiosGuard: GUARD_TEXT, schemaVersion: 99, clients: GUARD_TEXT }; }
+  function isGuard(v) { return !!(v && typeof v === 'object' && v.belegiosGuard); }
+  function looksLikeState(v) { return !!(v && typeof v === 'object' && !isGuard(v) && Array.isArray(v.clients)); }
+
+  // Byte-Kosten eines Zeichens im JSON-escapten UTF-8-String (Obergrenze)
+  function byteCost(ch) {
+    var c = ch.charCodeAt(0);
+    if (c === 34 || c === 92) return 2;
+    if (c < 0x20) return 6;
+    if (c < 0x80) return 1;
+    if (c < 0x800) return 2;
+    return 3;
+  }
+  function splitChunks(str, maxBytes) {
+    maxBytes = maxBytes || CHUNK_MAX_BYTES;
+    var out = [], start = 0, bytes = 0;
+    for (var i = 0; i < str.length; i++) {
+      var b = byteCost(str.charAt(i));
+      if (bytes + b > maxBytes && i > start) {
+        if (i > 0 && str.charCodeAt(i - 1) >= 0xD800 && str.charCodeAt(i - 1) <= 0xDBFF) i--;
+        out.push(str.slice(start, i)); start = i; bytes = 0;
+        b = byteCost(str.charAt(i));
+      }
+      bytes += b;
+    }
+    out.push(str.slice(start));
+    return out;
+  }
+
+  // Schluesselschema je Instanz
+  function Keys(prefix) {
+    var p = reEsc(prefix);
+    this.prefix = prefix;
+    this.manRe = new RegExp('^' + p + '\\.m(?:\\.(\\d+))?$');
+    this.chunkRe = new RegExp('^' + p + '\\.c-(\\d+)-([a-z0-9]+)-(\\d+)$');
+  }
+  Keys.prototype.manifest = function () { return this.prefix + '.m'; };
+  Keys.prototype.rank = function (key) {
+    var m = this.manRe.exec(key || ''); if (!m) return -1;
+    return m[1] ? +m[1] : 1;
+  };
+  Keys.prototype.next = function (key) {
+    var r = Math.max(1, this.rank(key)) + 1;
+    return this.prefix + '.m.' + r;
+  };
+  Keys.prototype.chunk = function (gen, i, token) { return this.prefix + '.c-' + gen + '-' + token + '-' + i; };
+  Keys.prototype.parseChunk = function (key) {
+    var m = this.chunkRe.exec(key || '');
+    return m ? { gen: +m[1], token: m[2], i: +m[3] } : null;
+  };
+
+  function checkModel(m, where) {
+    if (isGuard(m)) throw LoadError('Platzhalter statt Daten (' + where + ').', 'guard');
+    if (!m || typeof m !== 'object' || Array.isArray(m) || !Array.isArray(m.clients))
+      throw LoadError('Gespeicherte Daten haben ein unerwartetes Format (' + where + ').', 'corrupt');
+    if ((m.schemaVersion || 0) > SCHEMA_VERSION)
+      throw LoadError('Die Daten stammen von einer neueren Version des Belegungsplaners (Format ' + m.schemaVersion + '). Bitte Seite neu laden (Strg+F5).', 'newer');
+    return m;
+  }
+
+  // opts: { prefix, legacyKey, build, emptyModel }
+  function Store(transport, opts) {
+    opts = opts || {};
+    this.t = transport;
+    this.k = new Keys(opts.prefix);
+    this.legacyKey = opts.legacyKey || null;
+    this.build = opts.build || '';
+    this.emptyModel = opts.emptyModel || function () { return { clients: [] }; };
+    this.mayWrite = opts.mayWrite || function () { return true; };   // Wartung (GC/Versiegeln) nur mit Schreibrecht
+    this.gen = 0;              // bekannte Server-Generation (0 = noch kein Manifest)
+    this.token = null;
+    this.manifestKey = null;
+    this.legacy = null;        // {version} solange der Stand aus dem Altschluessel stammt
+    this.minGen = 0;           // nach Rueckfall ohne Manifest: neue Generation ueber allen Saetzen
+    this.readOnly = false;     // Ladefehler oder Rueckfall-Stand: Schreiben gesperrt
+    this.recovered = null;
+    this.lastError = null;
+    this.warning = null;       // nicht fataler Hinweis (z. B. Altversion hat parallel gespeichert)
+    this.sealed = false;
+    this.pending = Promise.resolve();   // Hintergrundarbeit nach dem Laden (GC, Versiegeln)
+  }
+
+  // Manifest mit der hoechsten Generation ueber alle Kandidaten-Schluessel (Property-Listing).
+  // Listing- oder Lesefehler werden durchgereicht (nie "kein Manifest" raten).
+  Store.prototype._manifest = function () {
+    var t = this.t, K = this.k;
+    return Promise.resolve().then(function () { return t.list(); }).then(function (keys) {
+      keys = keys || [];
+      var cands = keys.filter(function (k) { return K.manRe.test(k); });
+      return Promise.all(cands.map(function (k) {
+        return Promise.resolve(t.get(k)).then(function (r) { return r ? { key: k, value: r.value, version: r.version } : null; });
+      })).then(function (rs) {
+        var best = null;
+        rs.forEach(function (r) {
+          if (!r) return;
+          if (!r.value || typeof r.value !== 'object') throw LoadError('Manifest ' + r.key + ' ist nicht lesbar.', 'manifest');
+          var g = r.value.gen || 0, bg = best ? (best.value.gen || 0) : -1;
+          if (!best || g > bg || (g === bg && K.rank(r.key) > K.rank(best.key))) best = r;
+        });
+        var man = best || { key: K.manifest(), value: { gen: 0, count: 0 }, version: 0, none: true };
+        man.keys = keys;
+        return man;
+      });
+    });
+  };
+
+  Store.prototype._readSet = function (gen, token, count) {
+    var t = this.t, K = this.k, reads = [];
+    for (var i = 0; i < count; i++) reads.push(Promise.resolve(t.get(K.chunk(gen, i, token))));
+    return Promise.all(reads).then(function (chunks) {
+      if (chunks.some(function (c) { return !c || typeof c.value !== 'string'; }))
+        throw LoadError('Daten unvollstaendig (Teil fehlt, Generation ' + gen + ').', 'missing');
+      var model;
+      try { model = JSON.parse(chunks.map(function (c) { return c.value; }).join('')); }
+      catch (err) { throw LoadError('Gespeicherte Daten nicht lesbar (JSON, Generation ' + gen + ').', 'corrupt'); }
+      return checkModel(model, 'Generation ' + gen);
+    });
+  };
+
+  // Altschluessel lesen: null (404) | {guard:true,version} | {model,version}
+  Store.prototype._readLegacy = function () {
+    if (!this.legacyKey) return Promise.resolve(null);
+    var key = this.legacyKey;
+    return Promise.resolve(this.t.get(key)).then(function (r) {
+      if (!r) return null;
+      if (isGuard(r.value)) return { guard: true, version: r.version };
+      return { model: checkModel(r.value, 'Altformat'), version: r.version };
+    });
+  };
+
+  // Alle Chunk-Saetze dieser Instanz -> [{gen,token,count}] absteigend
+  Store.prototype.listSets = function (keys) {
+    var K = this.k, sets = {};
+    (keys || []).forEach(function (k) {
+      var p = K.parseChunk(k); if (!p) return;
+      var id = p.gen + '-' + p.token;
+      (sets[id] = sets[id] || { gen: p.gen, token: p.token, idx: {} }).idx[p.i] = 1;
+    });
+    return Object.keys(sets).map(function (id) {
+      var s = sets[id], n = 0; while (s.idx[n]) n++;
+      return { gen: s.gen, token: s.token, count: n };
+    }).filter(function (s) { return s.count > 0; })
+      .sort(function (x, y) { return y.gen - x.gen || (x.token < y.token ? 1 : -1); });
+  };
+
+  // -> {model, gen, token, manifest, legacy?, empty?, recovered?}
+  Store.prototype._fetchFresh = function (attempt) {
+    var self = this; attempt = attempt || 0;
+    return this._manifest().then(function (man) {
+      if ((man.value.schema || 0) > SCHEMA_VERSION)
+        throw LoadError('Die Daten wurden von einer neueren Version gespeichert (Build ' + (man.value.build || '?') + '). Bitte Seite neu laden (Strg+F5).', 'newer');
+      if (man.none) {
+        return self._readLegacy().then(function (lg) {
+          if (!lg) {
+            // Kein Manifest, kein Altschluessel – aber Datensaetze vorhanden? Dann ist das Manifest
+            // verloren gegangen: nie als "leer" behandeln.
+            if (self.listSets(man.keys).length) throw LoadError('Manifest fehlt, es sind aber Datenstaende vorhanden.', 'missing');
+            return { model: self.emptyModel(), gen: 0, token: null, manifest: man, empty: true };
+          }
+          if (lg.guard) throw LoadError('Kein Manifest gefunden, der Altschluessel ist aber bereits versiegelt (Daten wurden migriert).', 'missing');
+          return { model: lg.model, gen: 0, token: null, manifest: man, legacy: { version: lg.version } };
+        }).catch(function (err) {
+          if (err && (err.missing || err.corrupt)) return self._recover(man, err);
+          throw err;
+        });
+      }
+      var gen = man.value.gen || 0, count = man.value.count || 0, token = man.value.token || null;
+      if (!count) return { model: self.emptyModel(), gen: gen, token: token, manifest: man, empty: true };
+      return self._readSet(gen, token, count).then(function (model) {
+        return { model: model, gen: gen, token: token, manifest: man };
+      }, function (err) {
+        if (err && err.missing && attempt + 1 < LOAD_RETRIES) return self._fetchFresh(attempt + 1);
+        // Nur sicher fehlende/kaputte Daten fuehren zum Rueckfall – Transportfehler nie.
+        if (err && (err.missing || err.corrupt)) return self._recover(man, err);
+        throw err;
+      });
+    });
+  };
+
+  Store.prototype._recover = function (man, cause) {
+    var self = this, gen = man.value.gen || 0, sets = this.listSets(man.keys);
+    var cands = sets.filter(function (s) {
+      if (man.none) return true;
+      return s.gen <= gen && !(s.gen === gen && s.token === (man.value.token || null));
+    });
+    // Regulaere Generationen vor Altformat-Sicherungen ("alt..."), die nur letzte Wahl sind
+    cands = cands.filter(function (s) { return !/^alt/.test(s.token); })
+      .concat(cands.filter(function (s) { return /^alt/.test(s.token); }));
+    var maxGen = sets.reduce(function (a, s) { return Math.max(a, s.gen); }, gen);
+    function tryNext(i) {
+      if (i >= cands.length) throw LoadError(cause.message + ' Kein aelterer vollstaendiger Datenstand gefunden – bitte Administrator:in informieren.', 'unrecoverable');
+      var c = cands[i];
+      return self._readSet(c.gen, c.token, c.count).then(function (model) {
+        return { model: model, gen: gen, token: man.value.token || null, manifest: man, minGen: maxGen,
+                 recovered: { fromGen: c.gen, fromToken: c.token, manifestGen: gen, cause: cause.message } };
+      }, function () { return tryNext(i + 1); });
+    }
+    return tryNext(0);
+  };
+
+  Store.prototype._adopt = function (res) {
+    this.gen = res.gen; this.token = res.token;
+    this.manifestKey = res.manifest.key; this.manifestVersion = res.manifest.version;
+    this.legacy = res.legacy || null;
+    this.recovered = res.recovered || null;
+    this.minGen = res.minGen || 0;
+    this.hadData = this.hadData || !res.empty;
+  };
+
+  // Laden beim Start/Neuladen. Ladefehler -> readOnly + Rejection; Rueckfall -> readOnly.
+  Store.prototype.load = function () {
+    var self = this;
+    return this._fetchFresh(0).then(function (res) {
+      self._adopt(res);
+      self.lastError = null;
+      self.readOnly = !!res.recovered;
+      if (!res.recovered && self.gen > 0 && self.mayWrite()) {
+        var keys = res.manifest.keys;
+        self.pending = Promise.all([self.gc(keys), self.seal().catch(function () { return false; })]);
+      } else self.pending = Promise.resolve();
+      return res.model;
+    }, function (e) {
+      self.readOnly = true; self.lastError = e; self.recovered = null;
+      throw e;
+    });
+  };
+
+  // Generationen <= aktuell - KEEP entfernen; neuere (in Arbeit) nie anfassen.
+  Store.prototype.gc = function (keys) {
+    var self = this, t = this.t, K = this.k;
+    if (this.recovered || !this.gen) return Promise.resolve(0);
+    var dels = [];
+    (keys || []).forEach(function (k) {
+      var p = K.parseChunk(k); if (!p) return;
+      if (p.gen <= self.gen - KEEP_GENERATIONS)
+        dels.push(Promise.resolve().then(function () { return t.del(k); }).catch(function () {}));
+    });
+    return Promise.all(dels).then(function () { return dels.length; });
+  };
+
+  // Datenstand als nicht referenzierten Satz ablegen (Historie, fuer Admin-Wiederherstellung)
+  Store.prototype._archive = function (model, gen) {
+    var t = this.t, K = this.k, token = 'alt' + newToken();
+    var chunks = splitChunks(JSON.stringify(model));
+    return Promise.all(chunks.map(function (c, i) { return Promise.resolve(t.put(K.chunk(gen, i, token), c)); }))
+      .then(function () { return token; });
+  };
+
+  // Altschluessel versiegeln (Spec E). Echte Daten dort werden vorher als Historie gesichert.
+  Store.prototype.seal = function (attempt) {
+    var self = this, t = this.t, key = this.legacyKey;
+    attempt = attempt || 0;
+    if (!key || this.gen < 1) return Promise.resolve(false);
+    return Promise.resolve(t.get(key)).then(function (r) {
+      if (r && isGuard(r.value)) { self.sealed = true; return false; }
+      var arch = (r && looksLikeState(r.value)) ? self._archive(r.value, self.gen) : Promise.resolve(null);
+      return arch.then(function (tok) {
+        if (tok && (self.legacyLoaded == null || r.version !== self.legacyLoaded))
+          self.warning = 'Eine aeltere Version des Belegungsplaners hat parallel unter dem alten Format gespeichert. Dieser Stand wurde als Datenstand gesichert (Admin: Datenstaende).';
+        return Promise.resolve(t.put(key, guardValue(), r ? r.version : 0)).then(function () { return true; }, function (err) {
+          if (err && err.status === 409 && attempt < 2) return self.seal(attempt + 1);
+          // Seite in anderen Bereich verschoben: bestehende Property nicht aktualisierbar -> loeschen + neu anlegen
+          if (err && r && (err.spaceMismatch || (err.status >= 500 && err.status < 600)))
+            return Promise.resolve(t.del(key)).then(function () { return t.put(key, guardValue(), 0); }).then(function () { return true; });
+          throw err;
+        });
+      });
+    }).then(function (x) { self.sealed = true; return x; });
+  };
+
+  // Ein Schreibversuch auf Basis expectedGen. -> {conflict:true} | {gen, token, migratedTo?}
+  Store.prototype._saveChecked = function (model, expectedGen) {
+    var self = this, t = this.t, K = this.k;
+    return this._manifest().then(function (man) {
+      var srvGen = man.value.gen || 0;
+      if (srvGen !== expectedGen) return { conflict: true };
+      if ((man.value.schema || 0) > SCHEMA_VERSION) throw LoadError('Neuere Version hat gespeichert – bitte Seite neu laden.', 'newer');
+      // Noch im Altformat: hat eine alte Version inzwischen dort gespeichert? -> Konflikt (frisch mergen)
+      var pre = (man.none && self.legacy && self.legacyKey)
+        ? Promise.resolve(t.get(self.legacyKey)).then(function (r) { return !r || isGuard(r.value) || r.version !== self.legacy.version; })
+        : Promise.resolve(false);
+      return pre.then(function (changed) {
+        if (changed) return { conflict: true };
+        var newGen = Math.max(srvGen, self.minGen || 0) + 1, token = newToken();
+        var chunks = splitChunks(JSON.stringify(model));
+        var manVal = { gen: newGen, count: chunks.length, token: token, schema: SCHEMA_VERSION, build: self.build, ts: new Date().toISOString() };
+        var phase = 'chunks';
+        function dropOwn() {
+          return Promise.all(chunks.map(function (c, i) {
+            return Promise.resolve().then(function () { return t.del(K.chunk(newGen, i, token)); }).catch(function () {});
+          }));
+        }
+        return Promise.all(chunks.map(function (c, i) { return Promise.resolve(t.put(K.chunk(newGen, i, token), c)); }))
+          .then(function () { phase = 'manifest'; return Promise.resolve(t.put(man.key, manVal, man.version)); })
+          .then(function () { self.manifestKey = man.key; return { gen: newGen, token: token }; })
+          .catch(function (err) {
+            if (phase === 'chunks' || (err && err.status === 409)) {
+              return dropOwn().then(function () {
+                if (err && err.status === 409) return { conflict: true };
+                throw err;
+              });
+            }
+            // Antwort unklar (5xx, Netz): nachlesen, eigene Chunks nur loeschen, wenn sicher unreferenziert
+            return self._manifest().then(function (now) {
+              if (now.value && now.value.token === token && now.value.gen === newGen) {
+                self.manifestKey = now.key; return { gen: newGen, token: token, afterError: err.message };
+              }
+              if ((now.value.gen || 0) !== expectedGen) return dropOwn().then(function () { return { conflict: true }; });
+              if (err && (err.spaceMismatch || (err.status >= 500 && err.status < 600))) {
+                var nk = K.next(now.key);
+                return Promise.resolve(t.put(nk, manVal, 0)).then(function () {
+                  self.manifestKey = nk; return { gen: newGen, token: token, migratedTo: nk };
+                }, function (err2) {
+                  return dropOwn().then(function () {
+                    if (err2 && err2.status === 409) return { conflict: true };
+                    throw err;
+                  });
+                });
+              }
+              return dropOwn().then(function () { throw err; });
+            }, function () { throw err; });
+          });
+      });
+    });
+  };
+
+  // Speichern mit Konflikt-Replay. replay(base) wendet NUR das eigene Delta auf einen frisch
+  // geladenen Stand an und liefert den Merge (ohne replay: letzter gewinnt). Retry <= 2.
+  // -> {ok:true, gen, model, merged} | Rejection (Fehler sichtbar machen, Aufrufer rollt zurueck)
+  Store.prototype.save = function (model, replay, retries, merged) {
+    if (retries == null) retries = 2;
+    var self = this;
+    if (this.readOnly) return Promise.reject(new Error('Schreibgeschuetzt: die Daten wurden nicht vollstaendig geladen – es wird nichts gespeichert.'));
+    return this._saveChecked(model, this.gen).then(function (res) {
+      if (!res.conflict) {
+        self.gen = res.gen; self.token = res.token; self.recovered = null; self.minGen = 0; self.hadData = true;
+        var wasLegacy = !!self.legacy;
+        if (wasLegacy) self.legacyLoaded = self.legacy.version;
+        self.legacy = null;
+        var after = self.sealed ? Promise.resolve() : self.seal().catch(function (e) {
+          self.warning = 'Altschluessel konnte nicht versiegelt werden (' + (e && e.message) + '). Alte, noch offene Tabs bitte neu laden.';
+        });
+        return after.then(function () { return { ok: true, gen: res.gen, model: model, merged: !!merged, migrated: wasLegacy, migratedTo: res.migratedTo }; });
+      }
+      if (retries <= 0) {
+        var ce = new Error('Dauerkonflikt – andere speichern gerade gleichzeitig. Bitte erneut versuchen.'); ce.conflict = true; throw ce;
+      }
+      return self._fetchFresh(0).then(function (fresh) {
+        if (fresh.recovered) { self.readOnly = true; self.recovered = fresh.recovered; throw LoadError('Aktueller Datenstand ist unvollstaendig – Speichern abgebrochen, bitte Seite neu laden.', 'missing'); }
+        if (fresh.empty && self.hadData) { self.readOnly = true; throw LoadError('Datenstand beim Konflikt-Abgleich nicht mehr auffindbar – Speichern abgebrochen, bitte Seite neu laden.', 'missing'); }
+        self._adopt(fresh);
+        var base = fresh.model;
+        var next = replay ? (replay(base) || base) : model;
+        return self.save(next, replay, retries - 1, true);
+      });
+    });
+  };
+
+  // Versiegelung erneut pruefen (Polling): Ein Format-1-Tab, der VOR der Migration offen war,
+  // kann den Platzhalter mit seinem zweiten Speicherversuch ueberschreiben (er hat beim ersten,
+  // gescheiterten Versuch die Platzhalter-Version uebernommen). Dann wird sein Stand als
+  // Datenstand gesichert, neu versiegelt und ein Hinweis gezeigt. Neue Daten bleiben unberuehrt.
+  Store.prototype.checkSeal = function () {
+    if (!this.gen || this.readOnly || this.recovered || !this.mayWrite()) return Promise.resolve(false);
+    var self = this;
+    return Promise.resolve(this.t.get(this.legacyKey)).then(function (r) {
+      if (r && isGuard(r.value)) return false;
+      self.sealed = false;
+      return self.seal().then(function () { return true; });
+    });
+  };
+
+  // Hat jemand anderes gespeichert? (Polling)
+  Store.prototype.changedRemotely = function () {
+    var self = this;
+    return this._manifest().then(function (man) {
+      if (!man.none) return (man.value.gen || 0) > self.gen;
+      if (!self.legacy || !self.legacyKey) return false;
+      return Promise.resolve(self.t.get(self.legacyKey)).then(function (r) { return !!r && r.version !== self.legacy.version; });
+    });
+  };
+
+  // Admin: alle Datenstaende -> {manifest, rows:[{gen,token,count,ok,clients,lastModified,current,archived,error?}]}
+  Store.prototype.describeSets = function () {
+    var self = this;
+    return this._manifest().then(function (man) {
+      var sets = self.listSets(man.keys);
+      return Promise.all(sets.map(function (s) {
+        return self._readSet(s.gen, s.token, s.count).then(function (m) {
+          return { gen: s.gen, token: s.token, count: s.count, ok: true, clients: m.clients.length, lastModified: m.lastModified || null };
+        }, function (e) { return { gen: s.gen, token: s.token, count: s.count, ok: false, error: e.message }; });
+      })).then(function (rows) {
+        rows.forEach(function (x) {
+          x.current = !man.none && x.gen === (man.value.gen || 0) && x.token === (man.value.token || null);
+          x.archived = /^alt/.test(x.token);
+        });
+        // Aktueller Satz ganz verschwunden (alle/erste Teile fehlen)? Trotzdem als unlesbar zeigen.
+        if (!man.none && (man.value.count || 0) > 0 && !rows.some(function (x) { return x.current; }))
+          rows.unshift({ gen: man.value.gen || 0, token: man.value.token || null, count: man.value.count, ok: false, current: true,
+                         archived: false, error: 'Daten fehlen (Manifest zeigt ins Leere)' });
+        return { manifest: man.none ? null : man.value, manifestKey: man.key, rows: rows };
+      });
+    });
+  };
+
+  // Aelteren Stand als NEUE Generation wiederherstellen (nichts wird geloescht).
+  Store.prototype.restoreFrom = function (gen, token, count) {
+    var self = this;
+    return Promise.all([this._manifest(), this._readSet(gen, token, count)]).then(function (r) {
+      var man = r[0], snap = r[1];
+      var maxGen = self.listSets(man.keys).reduce(function (a, s) { return Math.max(a, s.gen); }, 0);
+      self.gen = man.value.gen || 0; self.token = man.value.token || null; self.manifestKey = man.key;
+      self.minGen = man.none ? maxGen : 0; self.legacy = null;
+      self.readOnly = false; self.lastError = null;
+      return self.save(clone(snap), function () { return clone(snap); });
+    });
+  };
+
+  /* ---------- Confluence-Transport (REST Content Properties) ---------- */
+  function ConfluenceTransport(pageId, ctx) {
+    this.base = (ctx || '') + '/rest/api/content/' + encodeURIComponent(pageId) + '/property';
+  }
+  ConfluenceTransport.prototype._req = function (method, url, body) {
+    return fetch(url, {
+      method: method, credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-Atlassian-Token': 'no-check' },
+      body: body ? JSON.stringify(body) : undefined
+    });
+  };
+  function httpError(what, status) {
+    var map = { 400: 'Anfrage abgelehnt (400) – Daten evtl. zu gross', 401: 'nicht angemeldet (401)', 403: 'keine Berechtigung (403)', 413: 'Daten zu gross (413)' };
+    var e = new Error((map[status] || ('HTTP ' + status)) + ' bei ' + what); e.status = status; return e;
+  }
+  function conflict() { var e = new Error('Versionskonflikt (409)'); e.status = 409; throw e; }
+  ConfluenceTransport.prototype.get = function (key) {
+    return this._req('GET', this.base + '/' + encodeURIComponent(key)).then(function (r) {
+      if (r.status === 404) return null;
+      if (!r.ok) throw httpError('GET ' + key, r.status);
+      return r.json().then(function (j) { return { value: j.value, version: j.version.number }; });
+    });
+  };
+  // expectedVersion: undefined = egal, 0 = darf noch nicht existieren, n = CAS auf Version n
+  ConfluenceTransport.prototype.put = function (key, value, expectedVersion) {
+    var self = this, url = this.base + '/' + encodeURIComponent(key);
+    return this.get(key).then(function (cur) {
+      if (!cur) {
+        if (expectedVersion !== undefined && expectedVersion !== 0) conflict();
+        return self._req('POST', self.base, { key: key, value: value }).then(function (r) { return check(r, true); });
+      }
+      if (expectedVersion !== undefined && expectedVersion !== cur.version) conflict();
+      return self._req('PUT', url, { key: key, value: value, version: { number: cur.version + 1 } }).then(function (r) { return check(r, false); });
+    });
+    function check(r, isPost) {
+      if (r.status === 409) conflict();
+      if (!r.ok) {
+        return r.text().catch(function () { return ''; }).then(function (txt) {
+          if (isPost && r.status === 400 && /already exists|bereits/i.test(txt || '')) conflict();
+          var e = httpError((isPost ? 'POST ' : 'PUT ') + key, r.status);
+          e.detail = (txt || '').slice(0, 500);
+          e.spaceMismatch = /another space/i.test(txt || '');
+          throw e;
+        });
+      }
+      return r.json().then(function (j) { return { version: j && j.version ? j.version.number : undefined }; });
+    }
+  };
+  ConfluenceTransport.prototype.del = function (key) {
+    return this._req('DELETE', this.base + '/' + encodeURIComponent(key)).then(function (r) {
+      if (!r.ok && r.status !== 404) throw httpError('DELETE ' + key, r.status);
+      return true;
+    });
+  };
+  // Alle Property-Schluessel der Seite (paginiert). Fehler werden geworfen (kein Raten).
+  ConfluenceTransport.prototype.list = function () {
+    var self = this, out = [];
+    function page(start) {
+      return self._req('GET', self.base + '?limit=200&start=' + start).then(function (r) {
+        if (!r.ok) throw httpError('Property-Liste', r.status);
+        return r.json().then(function (j) {
+          (j.results || []).forEach(function (p) { if (p && p.key) out.push(p.key); });
+          var size = j.size != null ? j.size : (j.results || []).length, lim = j.limit != null ? j.limit : 200;
+          if (size >= lim && start < 10000) return page(start + lim);
+          return out;
+        });
+      });
+    }
+    return page(0);
+  };
+
+  return {
+    Store: Store, Keys: Keys, LoadError: LoadError, ConfluenceTransport: ConfluenceTransport,
+    splitChunks: splitChunks, byteCost: byteCost, guardValue: guardValue, isGuard: isGuard,
+    SCHEMA_VERSION: SCHEMA_VERSION, KEEP_GENERATIONS: KEEP_GENERATIONS, CHUNK_MAX_BYTES: CHUNK_MAX_BYTES, GUARD_TEXT: GUARD_TEXT
+  };
+})();
+/* BELEGIOS-STORE-END */
+
 // ── SPRINT 1: AUTH + STORAGE ──────────────────────────────────────────
+var store = new BelegiosStore.Store(new BelegiosStore.ConfluenceTransport(pageId, _actCtx()), {
+  prefix: STORE_PREFIX, legacyKey: LEGACY_PROP_KEY, build: BUILD_VERSION, emptyModel: emptyState,
+  mayWrite: function(){ return pageCanEdit; }
+});
+var pageCanEdit = false;   // Bearbeitungsrecht laut Confluence-DOM
+var saveError   = null;    // letzter Speicherfehler (Banner bleibt stehen, bis geschlossen)
+// Effektives Schreibrecht: Seitenrecht UND Daten vollstaendig geladen
+function updateCanEdit(){ canEdit = pageCanEdit && !store.readOnly; return canEdit; }
+
 function checkCanEdit() {
   console.log('[bp]', instId, 'checkCanEdit start');
   // Confluence Server 7.4: currentuser.edit nicht zuverlässig via REST.
   // Edit-Button im DOM prüfen — Confluence rendert ihn nur für Nutzer mit Bearbeitungsrecht.
-  canEdit = !!(
+  pageCanEdit = !!(
     document.querySelector('#editPageLink')                              ||
     document.querySelector('.editPageLink')                              ||
     document.querySelector('.toolbar-item .page-edit-button')            ||
@@ -431,24 +983,34 @@ function checkCanEdit() {
     document.querySelector('.aui-nav .edit-button-wrap a')               ||
     document.querySelector('#action-edit-page')
   );
+  updateCanEdit();
   console.log('[bp]', instId, 'canEdit =', canEdit);
   return Promise.resolve();
 }
+
+// loadState(): laedt ueber den Store. Niemals still leer: bei Ladefehler bleibt der
+// bisherige Stand (falls vorhanden) nur zur Anzeige stehen, Schreiben ist gesperrt,
+// und ein deutlicher Hinweis erscheint. Die Rejection wird weitergereicht.
 function loadState() {
   var dupes = document.querySelectorAll('[id="bp-root-' + instId + '"]');
   if (dupes.length > 1) setStatus('WARNUNG: Gruppenbezeichnung "' + instId + '" ist auf dieser Seite doppelt vergeben!', true);
-  console.log('[bp]', instId, 'loadState fetch', '/rest/api/content/' + pageId + '/property/' + PROP_KEY);
-  return fetch('/rest/api/content/' + pageId + '/property/' + PROP_KEY,
-    {headers:{Accept:'application/json'}})
-  .then(function(r){
-    console.log('[bp]', instId, 'property response status', r.status);
-    if (r.status === 404) { state = emptyState(); stateVersion = 0; return state; }
-    if (!r.ok) throw new Error('Laden fehlgeschlagen: ' + r.status);
-    return r.json();
-  }).then(function(j){
-    if (j && j.value) { state = j.value; stateVersion = j.version.number; }
-    console.log('[bp]', instId, 'state loaded, clients:', (state.clients||[]).length, 'version:', stateVersion);
+  console.log('[bp]', instId, 'loadState', STORE_PREFIX, '(Altschluessel ' + LEGACY_PROP_KEY + ')');
+  return store.load().then(function(model){
+    state = model;
+    state.clients = state.clients || [];
+    rememberGood(state);
+    updateCanEdit();
+    renderPersistBanner();
+    console.log('[bp]', instId, 'state loaded, clients:', state.clients.length, 'gen:', store.gen,
+                store.legacy ? '(Altformat, wird beim naechsten Speichern migriert)' : '',
+                store.recovered ? '(RUECKFALL-STAND, schreibgeschuetzt)' : '');
+    store.pending.then(function(){ if (store.warning) renderPersistBanner(); });
     return state;
+  }, function(e){
+    console.error('[bp]', instId, 'Ladefehler', e);
+    updateCanEdit();
+    renderPersistBanner();
+    throw e;
   });
 }
 
@@ -457,56 +1019,101 @@ function loadState() {
 //     (fremden) Stand neu an und gibt den zusammengeführten Stand zurück.
 //     Bei 409 (jemand anderes hat zwischenzeitlich gespeichert) wird so nicht der
 //     komplette Snapshot überschrieben, sondern nur das eigene Delta gemergt —
-//     fremde Änderungen an anderen Klienten/Feldern bleiben erhalten.
+//     fremde Änderungen an anderen Klienten/Feldern bleiben erhalten (≤ 2 Wiederholungen).
 //   Ohne replay: Fallback = letzter-gewinnt (alter Stand wird überschrieben).
+//   Speicherungen eines Tabs laufen nacheinander (keine Selbst-Konflikte).
+//   Fehler werden als Rejection gemeldet UND als stehender Hinweis angezeigt.
+var _saveChain = Promise.resolve();
+var _savesPending = 0;     // laufende/wartende Speicherungen dieses Tabs
+var _saveSeq = 0;          // zählt erfolgreiche Speicherungen/Ladevorgänge
+var lastGood = null;       // zuletzt sicher persistierter bzw. geladener Stand (tiefe Kopie)
+function rememberGood(m){ lastGood = JSON.parse(JSON.stringify(m)); _saveSeq++; }
 function saveState(ns, opts) {
   opts = opts || {};
-  var retry  = opts.retry  || 0;
   var replay = opts.replay;
-  if (!canEdit) return Promise.reject(new Error('Keine Schreibrechte.'));
-  ns.lastModified = new Date().toISOString();
-  var isNew = stateVersion === 0;
-  var body  = {key:PROP_KEY, value:ns, version:{number:stateVersion+1}};
-  return fetch('/rest/api/content/' + pageId + '/property/' + (isNew ? '' : PROP_KEY), {
-    method: isNew ? 'POST' : 'PUT',
-    headers:{'Content-Type':'application/json','X-Atlassian-Token':'no-check'},
-    body: JSON.stringify(body)
-  }).then(function(r){
-    if (r.status === 409 && retry < 2) {
-      // Konflikt: fremden Stand holen OHNE globalen state zu überschreiben
-      // (damit ein etwaiger Rollback im Aufrufer korrekt bleibt), nur das eigene
-      // Delta neu anwenden, dann den Merge speichern.
-      return fetchFresh().then(function(fresh){
-        stateVersion = fresh.version;
-        var merged = replay ? replay(fresh.value) : ns;
-        return saveState(merged, {retry:retry+1, replay:replay, merged:true});
-      });
-    }
-    if (!r.ok) throw new Error('Speichern fehlgeschlagen: ' + r.status);
-    return r.json().then(function(j){
-      stateVersion = j.version.number;
-      state = ns;
+  if (!pageCanEdit) return Promise.reject(new Error('Keine Schreibrechte.'));
+  if (store.readOnly) return Promise.reject(new Error('Schreibgeschützt: Daten wurden nicht vollständig geladen – nichts gespeichert.'));
+  function stamp(m){ m.lastModified = new Date().toISOString(); m.schemaVersion = BelegiosStore.SCHEMA_VERSION; return m; }
+  var wrapped = replay ? function(base){ return stamp(replay(base) || base); } : null;
+  function run(){
+    // Mit replay: Basis ist der zuletzt persistierte Stand + NUR das eigene Delta. So können
+    // lokale Rollbacks früherer, gescheiterter Speicherungen oder ein inzwischen eingemergter
+    // Fremdstand nie still mitgespeichert bzw. überschrieben werden.
+    var model = (wrapped && lastGood) ? wrapped(JSON.parse(JSON.stringify(lastGood))) : stamp(JSON.parse(JSON.stringify(ns)));
+    // Vergleich ohne Zeitstempel (das Replay setzt updatedAt neu)
+    function sig(cs){ return JSON.stringify(cs || [], function(k, v){ return k === 'updatedAt' ? undefined : v; }); }
+    var ownJson = sig(ns.clients);
+    return store.save(model, wrapped).then(function(res){
+      saveError = null;
+      rememberGood(res.model);
+      var differs = res.merged || sig(res.model.clients) !== ownJson;
+      state = differs ? res.model : ns;
+      if (!differs) { state.lastModified = res.model.lastModified; state.schemaVersion = res.model.schemaVersion; }
       // Nach erfolgreichem Merge: UI auf den zusammengeführten Stand bringen
       // (zeigt jetzt auch die fremden Änderungen, nicht nur das eigene Delta).
-      if (opts.merged) { renderTable(state); renderBanner(state); }
+      if (differs) { renderTable(state); renderBanner(state); }
+      if (res.migrated) console.log('[bp]', instId, 'Altformat migriert, Generation', res.gen);
+      if (res.migratedTo) console.warn('[bp]', instId, 'Manifest umgezogen auf', res.migratedTo, '(Seite vermutlich verschoben)');
       hideUpdateBanner();
+      renderPersistBanner();
       scheduleActivityBump();   // fachliche Änderung → (gedrosselt) Stream-Eintrag
       return state;
+    }, function(e){
+      saveError = e;
+      updateCanEdit();
+      renderPersistBanner();
+      // Nach dem Rollback des Aufrufers die Anzeige hart auf den letzten sicheren Stand setzen
+      // (falls inzwischen nichts anderes gespeichert wurde und nichts mehr wartet).
+      var seq = _saveSeq;
+      setTimeout(function(){
+        if (_saveSeq !== seq || _savesPending > 0 || !lastGood) return;
+        state = JSON.parse(JSON.stringify(lastGood));
+        renderTable(state); renderBanner(state);
+      }, 0);
+      throw e;
     });
-  });
+  }
+  _savesPending++;
+  var p = _saveChain.then(run, run);
+  _saveChain = p.then(function(){ _savesPending--; }, function(){ _savesPending--; });
+  return p;
 }
 
-// fetchFresh(): liest den aktuellen Property-Stand (Wert + Versionsnummer),
-// ohne den globalen state/stateVersion als Seiteneffekt zu verändern.
-function fetchFresh(){
-  return fetch('/rest/api/content/' + pageId + '/property/' + PROP_KEY,
-    {headers:{Accept:'application/json'}})
-  .then(function(r){
-    if (r.status === 404) return {value: emptyState(), version: 0};
-    if (!r.ok) throw new Error('Konflikt-Reload fehlgeschlagen: ' + r.status);
-    return r.json().then(function(j){ return {value:j.value, version:j.version.number}; });
-  });
+// Stehender Hinweis für Lade-/Speicherprobleme (ersetzt nicht die Kurzmeldung setStatus)
+function renderPersistBanner(){
+  var el = document.getElementById('bp-persist-' + instId);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'bp-persist-' + instId;
+    el.className = 'bp-persist-banner';
+    var ref = BANNER_EL || TABLE_EL;
+    if (ref && ref.parentNode) ref.parentNode.insertBefore(el, ref); else ROOT.insertBefore(el, TABLE_EL);
+  }
+  var html = '', cls = 'bp-persist-banner';
+  if (store.lastError) {
+    cls += ' bp-persist-error';
+    html = '<strong>Daten konnten nicht geladen werden – schreibgeschützt.</strong> ' + h(store.lastError.message) +
+      '<br>Es wird nichts gespeichert. Bitte Seite neu laden; bleibt der Fehler, Administrator:in informieren (Datenstände).' +
+      ' <button class="bp-btn bp-btn-sm" data-bp-action="reload">Erneut laden</button>';
+  } else if (store.recovered) {
+    cls += ' bp-persist-error';
+    html = '<strong>Achtung: älterer Datenstand angezeigt – schreibgeschützt.</strong> Der zuletzt gespeicherte Stand (Generation ' +
+      h(store.recovered.manifestGen) + ') ist unvollständig (' + h(store.recovered.cause) + '). Angezeigt wird Generation ' +
+      h(store.recovered.fromGen) + '. Speichern ist gesperrt, bis eine Administrator:in den Stand über „Datenstände“ bewusst wiederherstellt.';
+  } else if (saveError) {
+    cls += ' bp-persist-error';
+    html = '<strong>Letzte Änderung wurde NICHT gespeichert.</strong> ' + h(saveError.message) +
+      ' Die Anzeige wurde zurückgesetzt; bitte die Änderung erneut vornehmen.' +
+      ' <button class="bp-btn bp-btn-sm" data-bp-action="dismiss-persist">Schließen</button>';
+  } else if (store.warning) {
+    cls += ' bp-persist-warn';
+    html = h(store.warning) + ' <button class="bp-btn bp-btn-sm" data-bp-action="dismiss-persist">Schließen</button>';
+  }
+  el.className = cls;
+  el.innerHTML = html;
+  el.style.display = html ? 'block' : 'none';
 }
+
 
 // ── Replay-Helfer: beschreiben die eigene Änderung als Funktion, die sie auf
 //    einen beliebigen (fremden) Basis-Stand neu anwendet. Idempotent: es werden
@@ -1285,6 +1892,7 @@ function readColToggles(cbClass){
 // Anzeige-Sichtbarkeit (Einstellungen) — @media screen, Druck bleibt unberührt
 function applyViewCSS(){
   var old=document.getElementById('bp-view-style-'+instId); if(old)old.remove();
+  if(!state) return;
   var rules=collectHideRules(state.viewCols, false);
   if(!rules)return;
   var s=document.createElement('style');
@@ -1328,7 +1936,10 @@ function openPrintModal(){
 
 function handleConfirmPrint(){
   state.printCols=readColToggles('bp-print-col-cb');
-  saveState(state, {replay: replaySetTop({printCols: state.printCols})}).catch(function(){});
+  saveState(state, {replay: replaySetTop({printCols: state.printCols})}).catch(function(e){
+    // Druck läuft trotzdem; die Spaltenauswahl ist aber nicht gespeichert -> sichtbar melden
+    setStatus('Spaltenauswahl NICHT gespeichert: '+(e&&e.message||e), true);
+  });
   var dInp=document.getElementById('bp-print-date');
   var todayIso=toISO(new Date());
   // Nur wenn ein abweichendes, gültiges Datum gewählt wurde → Stichtags-Vorschau.
@@ -1457,7 +2068,10 @@ function handleVersandMail(){
   if(!to){showErr({'bp-v-to':'Empfänger erforderlich'});return;}
   if(body.length>1500) setStatus('Hinweis: Nachricht ist lang — könnte in manchen Mail-Clients gekürzt werden.');
   state.mailTemplate={to:to,cc:cc,subject:subject,body:body};
-  saveState(state, {replay: replaySetTop({mailTemplate: state.mailTemplate})}).catch(function(){});
+  saveState(state, {replay: replaySetTop({mailTemplate: state.mailTemplate})}).catch(function(e){
+    // Mail wird trotzdem geöffnet; die Vorlage ist aber nicht gespeichert -> sichtbar melden
+    setStatus('Versand-Vorlage NICHT gespeichert: '+(e&&e.message||e), true);
+  });
   var params=[];
   if(cc)      params.push('cc='+encodeURIComponent(cc));
   if(subject) params.push('subject='+encodeURIComponent(subject));
@@ -1864,6 +2478,8 @@ var SELFTEST = {
     t.assertEq('Regression','dateInRange: leer → false', dateInRange(''), false);
 
     // [Selbstzahler] SZ → keine VA-Status (VA stellen / beantragt / bewilligt); 'Entscheidung' bleibt.
+    // ddi war hier nicht definiert (nur in runIntegration) -> Unit-Block brach ab. Lokal definieren.
+    var ddi = function(off){ var x=new Date(fix.today); x.setDate(x.getDate()+off); return toISO(x); };
     var szB={aufnahmedatum:ddi(-60), kostenzusage_bis:ddi(120)};
     t.assertEq('Regression','SZ + verl_bis → NICHT „VA stellen"',
       computeStatus(Object.assign({},szB,{kostenzusage_traeger:'SZ',verlaengerung_bis:ddi(30),verlaengerung_status:'keine'})).code!==S.VZUB, true);
@@ -2731,11 +3347,14 @@ function applyAdminUI(){
   st.style.display = isAdmin ? 'block' : 'none';
   console.log('[BP-admin] Selbsttest-Panel:', isAdmin ? 'SICHTBAR' : 'versteckt');
   if(isAdmin) wireSelftestButton();
+  // Panel liegt ausserhalb von .bp-root (keine Event-Delegation) -> Datenstaende direkt verdrahten
+  var ds = st.querySelector('[data-bp-action="admin-datenstaende"]');
+  if(isAdmin && ds && !ds._bpWired){ ds._bpWired = true; ds.addEventListener('click', openDatenstaendeModal); }
 }
 
 function applyAuthUI(){
   // Buttons sind in der Titelzeile (canEdit-gated in renderTable).
-  if(!canEdit){
+  if(!pageCanEdit){
     var hint=document.createElement('div');
     hint.className='bp-readonly-hint';
     hint.textContent='Nur-Lese-Ansicht \u2014 zum Bearbeiten Seite entsperren.';
@@ -2778,24 +3397,23 @@ function hideUpdateBanner(){
 }
 
 function applyPendingUpdate(){
-  // Immer frisch laden → korrekter Stand UND korrekte stateVersion
+  // Immer frisch laden → korrekter Stand UND korrekte Generation
   // (auch wenn der Nutzer zwischenzeitlich selbst gespeichert hat).
   loadState().then(function(){
     renderTable(state); renderBanner(state);
     hideUpdateBanner(); setStatus('Aktualisiert.');
-  }).catch(function(e){ setStatus('Fehler beim Laden: '+(e&&e.message||e), true); });
+  }).catch(function(e){ renderLoadFailed(); setStatus('Fehler beim Laden: '+(e&&e.message||e), true); });
 }
 
 function pollVersion(){
   if(_polling || !pageId || document.hidden) return;
   _polling = true;
-  fetch('/rest/api/content/' + pageId + '/property/' + PROP_KEY, {headers:{Accept:'application/json'}})
-  .then(function(r){ return r.status === 404 ? null : r.json(); })
-  .then(function(j){
-    _polling = false;
-    if(j && j.version && j.version.number > stateVersion) showUpdateBanner();
+  store.changedRemotely()
+  .then(function(changed){
+    if(changed) showUpdateBanner();
+    return store.checkSeal().then(function(resealed){ if(resealed) renderPersistBanner(); });
   })
-  .catch(function(){ _polling = false; });
+  .then(function(){ _polling = false; }, function(){ _polling = false; });
 }
 
 function startPolling(){
@@ -2935,7 +3553,8 @@ function diagnoseActivityEndpoint(){
 function scheduleMidnightRefresh(){
   var now=new Date(), tom=new Date(now.getFullYear(),now.getMonth(),now.getDate()+1);
   setTimeout(function(){
-    loadState().then(function(){renderTable(state);renderBanner(state);scheduleMidnightRefresh();});
+    loadState().then(function(){renderTable(state);renderBanner(state);},function(){renderLoadFailed();})
+      .then(scheduleMidnightRefresh);
   },tom-now);
 }
 
@@ -2960,7 +3579,10 @@ ROOT.addEventListener('click',function(e){
       case 'save-settings':    handleSaveSettings(); break;
       case 'selftest':         SELFTEST.run(); break;
       case 'versand-mail':    handleVersandMail(); break;
-      case 'reload':          loadState().then(function(){renderTable(state);renderBanner(state);setStatus('Aktualisiert.');}); break;
+      case 'reload':          loadState().then(function(){renderTable(state);renderBanner(state);applyViewCSS();ensureRuntime();setStatus('Aktualisiert.');},function(e){renderLoadFailed();setStatus('Fehler beim Laden: '+(e&&e.message||e),true);}); break;
+      case 'dismiss-persist': saveError=null; store.warning=null; renderPersistBanner(); break;
+      case 'admin-datenstaende': openDatenstaendeModal(); break;
+      case 'admin-restore':   handleRestore(t.getAttribute('data-bp-gen'), t.getAttribute('data-bp-token'), t.getAttribute('data-bp-count')); break;
       case 'toggle-entlassen': showEntlassen=!showEntlassen; renderTable(state); break;
       case 'sort': {
         var sk=t.getAttribute('data-bp-sortkey');
@@ -3041,24 +3663,102 @@ ROOT.addEventListener('click',function(e){
 function init(){
   console.log('[bp]', instId, 'init start, pageId=', pageId);
   fetchTinyLink();   // nicht blockierend — Fallback greift, bis er da ist
-  Promise.all([checkCanEdit(),loadState()]).then(function(){
+  console.log('[bp] Belegungsplaner Build ' + BUILD_VERSION);
+  renderBuildFooter();
+  var loadErr = null;
+  Promise.all([checkCanEdit(), loadState().catch(function(e){ loadErr = e; })]).then(function(){
     applyAuthUI();
+    // Admin-Werkzeuge (Selbsttest, Datenstände) auch nach Ladefehler erreichbar
     checkAdminGroup().then(function(a){ isAdmin=a; applyAdminUI(); });
+    if (loadErr) {
+      console.error('[bp]', instId, 'init: Ladefehler', loadErr);
+      renderLoadFailed();
+      setStatus('Fehler beim Laden: '+(loadErr&&loadErr.message||loadErr),true);
+      return;
+    }
     renderTable(state);
     renderBanner(state);
     applyViewCSS();
-    scheduleMidnightRefresh();
-    startPolling();
-    wireActivityFlush();
+    ensureRuntime();
     setStatus('');
     wireSelftestButton();
   }).catch(function(e){console.error('[bp]', instId, 'init error', e); setStatus('Fehler beim Laden: '+(e&&e.message||e),true);});
 }
 
+// Hintergrund-Abläufe (Mitternacht, Polling, Activity-Flush) genau einmal starten –
+// nach Ladefehler erst, wenn ein Stand erfolgreich geladen/wiederhergestellt wurde.
+var _runtimeStarted = false;
+function ensureRuntime(){
+  if (_runtimeStarted) return;
+  _runtimeStarted = true;
+  scheduleMidnightRefresh();
+  startPolling();
+  wireActivityFlush();
+}
+
+// Ladefehler: KEINE Tabelle aus einem leeren Ersatzmodell, sondern ein klarer Hinweis.
+// Ist schon ein Stand aus einem früheren Laden da, bleibt er sichtbar (schreibgeschützt).
+function renderLoadFailed(){
+  updateCanEdit();
+  renderPersistBanner();
+  if (state && state.clients) { renderTable(state); renderBanner(state); return; }
+  TABLE_EL.innerHTML='<p class="bp-load-failed">Belegung konnte nicht geladen werden. Es werden keine Daten angezeigt und nichts gespeichert (siehe Hinweis oben).</p>';
+}
+
+function renderBuildFooter(){
+  var el = document.getElementById('bp-build-' + instId);
+  if (el) el.textContent = 'Belegungsplaner Build ' + BUILD_VERSION + ' · Datenformat ' + BelegiosStore.SCHEMA_VERSION;
+}
+
+// ── ADMIN: Datenstände (Historie) anzeigen + wiederherstellen ─────────
+function openDatenstaendeModal(){
+  if(!isAdmin){ setStatus('Nur für Administrator:innen.', true); return; }
+  MODAL_EL.innerHTML = buildModal({title:'Datenstände — '+h(instId), body:'<p>Lade &hellip;</p>',
+    footer:'<button class="bp-btn" data-bp-action="close-modal">Schließen</button>'});
+  bindEsc();
+  store.describeSets().then(function(d){
+    var man = d.manifest;
+    var rows = d.rows.map(function(r){
+      var when = r.lastModified ? new Date(r.lastModified).toLocaleString('de-DE') : '—';
+      var lbl = r.current ? '<strong>aktuell</strong>' : (r.archived ? 'Sicherung Altformat' : '');
+      var btn = (!r.current && r.ok && pageCanEdit)
+        ? '<button class="bp-btn bp-btn-sm" data-bp-action="admin-restore" data-bp-gen="'+h(r.gen)+'" data-bp-token="'+h(r.token)+'" data-bp-count="'+h(r.count)+'">Wiederherstellen</button>' : '';
+      return '<tr><td>'+h(r.gen)+'</td><td>'+(r.ok?h(r.clients):'<span style="color:#bf2600">unlesbar</span>')+'</td>'+
+             '<td>'+h(when)+'</td><td>'+lbl+(r.ok?'':' <span class="bp-hint">'+h(r.error)+'</span>')+'</td><td>'+btn+'</td></tr>';
+    }).join('');
+    var head = '<p class="bp-hint">Manifest: '+h(d.manifestKey)+(man?' · Generation '+h(man.gen)+' · Build '+h(man.build||'?'):' · noch keins (Altformat)')+
+               '. Es bleiben die letzten '+BelegiosStore.KEEP_GENERATIONS+' Generationen erhalten. Wiederherstellen legt eine NEUE Generation an; nichts wird gelöscht.</p>';
+    var body = head + (rows ? '<table class="bp-ds-table"><thead><tr><th>Gen.</th><th>Klient:innen</th><th>Stand</th><th></th><th></th></tr></thead><tbody>'+rows+'</tbody></table>'
+                            : '<p>Keine Datenstände im neuen Format vorhanden.</p>');
+    var bodyEl = MODAL_EL.querySelector('.bp-modal-body'); if(bodyEl) bodyEl.innerHTML = body;
+  }).catch(function(e){
+    var bodyEl = MODAL_EL.querySelector('.bp-modal-body');
+    if(bodyEl) bodyEl.innerHTML = '<p style="color:#bf2600">Datenstände nicht lesbar: '+h(e&&e.message||e)+'</p>';
+  });
+}
+
+function handleRestore(gen, token, count){
+  if(!isAdmin) return;
+  gen = parseInt(gen,10); count = parseInt(count,10);
+  confirm2('Datenstand wiederherstellen?',
+    'Generation '+h(gen)+' wird als neuer, aktueller Stand gespeichert. Der bisherige Stand bleibt als Historie erhalten.',
+    'Wiederherstellen', true)
+  .then(function(ok){
+    if(!ok) return;
+    store.restoreFrom(gen, token, count).then(function(res){
+      state = res.model; saveError = null; rememberGood(state);
+      updateCanEdit(); closeModal();
+      renderPersistBanner(); renderTable(state); renderBanner(state); applyViewCSS();
+      ensureRuntime();
+      setStatus('Datenstand (Generation '+gen+') wiederhergestellt.');
+    }).catch(function(e){ setStatus('Wiederherstellen fehlgeschlagen: '+(e&&e.message||e), true); });
+  });
+}
+
 // Module-Export für Erweiterungen (Sprint 6+)
 window._bp=window._bp||{};
 window._bp[instId]={
-  loadState:loadState, saveState:saveState,
+  loadState:loadState, saveState:saveState, store:store, build:BUILD_VERSION,
   getState:function(){return state;},
   canEdit:function(){return canEdit;},
   getPermaLink:getPermaLink, getLongLink:getLongLink, fetchTinyLink:fetchTinyLink,
@@ -3151,6 +3851,7 @@ Er steht als normaler Text in der Nachricht und kann verschoben oder gel&ouml;sc
     <strong style="font-size:12px;color:#5e6c84">Maintainer-Werkzeuge:</strong>
     <button class="bp-btn bp-btn-sm" id="bp-selftest-run-${paramGruppenbezeichnung}" data-bp-action="selftest">Selbsttest ausführen</button>
     <span style="font-size:11px;color:#97a0af">— prüft Logik &amp; Handler gegen Fixture-Daten ohne echte Persistierung</span>
+    <button class="bp-btn bp-btn-sm" data-bp-action="admin-datenstaende">Datenstände</button>
   </div>
   <div id="bp-selftest-result-${paramGruppenbezeichnung}" style="margin-top:10px"></div>
 </div>
@@ -3165,8 +3866,11 @@ details[open] .bp-guide-summary::before{content:'\25bc\00a0'}
 .bp-guide-body h4{margin:12px 0 4px;font-size:13px;color:#172b4d}
 .bp-guide-body ol,.bp-guide-body p{margin:0 0 6px}
 .bp-guide-body li{margin-bottom:3px}
-@media print{.bp-guide{display:none}.bp-selftest{display:none !important}}
+.bp-build{margin-top:6px;font-size:10px;color:#97a0af;text-align:right}
+@media print{.bp-guide{display:none}.bp-selftest{display:none !important}.bp-build{display:none}}
 </style>
+
+<div class="bp-build" id="bp-build-${paramGruppenbezeichnung}">Belegungsplaner</div>
 
 <!-- END BELEGUNGSPLANER $paramGruppenbezeichnung -->
 
